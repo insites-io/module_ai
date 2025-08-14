@@ -34,8 +34,8 @@ COPY --from=builder /usr/local/bin /usr/local/bin
 # Copy application code
 COPY --chown=appuser:appuser . .
 
-# Copy vertex credentials for authentication
-COPY --chown=appuser:appuser vertex-credentials.json /app/vertex-credentials.json
+# Copy vertex credentials for authentication (optional - can be overridden by environment variables)
+COPY --chown=appuser:appuser vertex-credentials.json* /app/vertex-credentials.json 2>/dev/null || echo "No vertex-credentials.json found, will use environment variables"
 
 # Make startup script executable
 RUN chmod +x /app/start.sh
