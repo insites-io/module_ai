@@ -748,18 +748,18 @@ def save_contact(contact_data: Dict[str, Any]) -> Dict[str, Any]:
         
         logger.info(f"save_contact tool finished. Response status: {response.status_code}")
         
-        # if response.status_code in [200, 201]:
-        #     try:
-        #         contact_result = response.json()
-        #         logger.info(f"Contact {'created' if response.status_code == 201 else 'updated'} successfully with UUID: {contact_result.get('uuid', 'N/A')}")
-        #     except json.JSONDecodeError as e:
-        #         logger.error(f"Failed to parse JSON response when trying to save contact. Error: {str(e)}")
-        #         return {
-        #             "success": False,
-        #             "error": f"Invalid JSON response when trying to save contact",
-        #             "status_code": response.status_code,
-        #             "response_preview": response.text[:200] + "..." if len(response.text) > 200 else response.text
-        #         }
+        if response.status_code in [200, 201]:
+            try:
+                contact_result = response.json()
+                logger.info(f"Contact {'created' if response.status_code == 201 else 'updated'} successfully with UUID: {contact_result.get('uuid', 'N/A')}")
+            except json.JSONDecodeError as e:
+                logger.error(f"Failed to parse JSON response when trying to save contact. Error: {str(e)}")
+                return {
+                    "success": False,
+                    "error": f"Invalid JSON response when trying to save contact",
+                    "status_code": response.status_code,
+                    "response_preview": response.text[:200] + "..." if len(response.text) > 200 else response.text
+                }
             
         #     # Handle default_address creation for new contacts
         #     if response.status_code == 201 and temp_address_data:
@@ -801,13 +801,13 @@ def save_contact(contact_data: Dict[str, Any]) -> Dict[str, Any]:
         #         "result": contact_result,
         #         "message": "Contact saved successfully" if response.status_code == 201 else "Contact updated successfully"
         #     }
-        # else:
-        #     logger.warning(f"Failed to save contact. Status: {response.status_code}, Error: {response.text}")
-        #     return {
-        #         "success": False,
-        #         "status_code": response.status_code,
-        #         "error": response.text
-        #     }
+        else:
+            logger.warning(f"Failed to save contact. Status: {response.status_code}, Error: {response.text}")
+            return {
+                "success": False,
+                "status_code": response.status_code,
+                "error": response.text
+            }
     except requests.exceptions.Timeout:
         logger.warning("Request timed out for save_contact")
         return {"success": False, "error": "Request timed out after 30 seconds"}
