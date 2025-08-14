@@ -98,6 +98,13 @@ async def lifespan(app: FastAPI):
     except Exception as cleanup_error:
         print(f"DEBUG: Error during cleanup: {cleanup_error}")
 
+app = FastAPI(
+    title="MCP CRM API with UI",
+    description="API for CRM operations using MCP protocol and LangChain with web interface",
+    version="1.0.0",
+    lifespan=lifespan
+)
+
 # Global exception handler for unhandled async errors
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
@@ -110,13 +117,6 @@ async def global_exception_handler(request: Request, exc: Exception):
         "detail": str(exc),
         "timestamp": "2025-08-11T02:30:00Z"
     }
-
-app = FastAPI(
-    title="MCP CRM API with UI",
-    description="API for CRM operations using MCP protocol and LangChain with web interface",
-    version="1.0.0",
-    lifespan=lifespan
-)
 
 # --- Mount static files ---
 app.mount("/static", StaticFiles(directory="static"), name="static")
