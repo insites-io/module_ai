@@ -32,15 +32,15 @@ def parse_arguments():
     parser.add_argument('--instance-api-key', type=str, required=True, help='Instance API key for authentication')
     return parser.parse_args()
 
-# Only parse arguments if this script is run directly
-if __name__ == "__main__":
+# Parse arguments - this is what the MCP library expects
+try:
     args = parse_arguments()
     INSTANCE_URL = args.instance_url
     INSTANCE_API_KEY = args.instance_api_key
-else:
-    # When imported as a module, these will be set by the MCP library
-    INSTANCE_URL = None
-    INSTANCE_API_KEY = None
+except SystemExit:
+    # If no arguments provided (like when imported), use environment variables or defaults
+    INSTANCE_URL = os.getenv("CRM_INSTANCE_URL")
+    INSTANCE_API_KEY = os.getenv("CRM_INSTANCE_API_KEY")
 
 # FastMCP Initialization - lazy load to avoid hanging during import
 _mcp_instance = None
