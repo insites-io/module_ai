@@ -37,6 +37,9 @@ COPY --chown=appuser:appuser . .
 # Copy startup script explicitly (since it's in .gitignore)
 COPY --chown=appuser:appuser start_ui.sh /app/start_ui.sh
 
+# Ensure Python scripts are executable
+RUN chmod +x /app/servers/*.py
+
 # Note: vertex-credentials.json should be provided via environment variables or mounted as a volume
 # The application will use GOOGLE_APPLICATION_CREDENTIALS environment variable or default credentials
 

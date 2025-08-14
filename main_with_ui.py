@@ -230,7 +230,7 @@ async def handle_prompt(request: Request):
                 return
                 
             # Create server parameters with instance variables as command line arguments
-            server_args = ["servers/crm_server.py"]
+            server_args = ["/usr/local/bin/python", "/app/servers/crm_server.py"]
             if instance_url:
                 server_args.extend(["--instance-url", instance_url])
             if instance_api_key:
@@ -238,8 +238,31 @@ async def handle_prompt(request: Request):
             
             print(f"DEBUG: Starting MCP server with args: {server_args}")
             
+            # Debug: Check if the script exists and is executable
+            import os
+            script_path = "/app/servers/crm_server.py"
+            if os.path.exists(script_path):
+                print(f"DEBUG: Script exists at {script_path}")
+                if os.access(script_path, os.R_OK):
+                    print(f"DEBUG: Script is readable")
+                else:
+                    print(f"DEBUG: Script is NOT readable")
+                if os.access(script_path, os.X_OK):
+                    print(f"DEBUG: Script is executable")
+                else:
+                    print(f"DEBUG: Script is NOT executable")
+            else:
+                print(f"DEBUG: Script does NOT exist at {script_path}")
+                # List contents of /app/servers directory
+                try:
+                    import subprocess
+                    result = subprocess.run(["ls", "-la", "/app/servers"], capture_output=True, text=True)
+                    print(f"DEBUG: Contents of /app/servers: {result.stdout}")
+                except Exception as ls_error:
+                    print(f"DEBUG: Could not list /app/servers: {ls_error}")
+            
             stdio_server_params = StdioServerParameters(
-                command="python",
+                command="/usr/local/bin/python",
                 args=server_args,
             )
             
@@ -348,14 +371,14 @@ async def direct_query(request: Request):
             }
             
         # Create server parameters with instance variables as command line arguments
-        server_args = ["servers/crm_server.py"]
+        server_args = ["/usr/local/bin/python", "/app/servers/crm_server.py"]
         if instance_url:
             server_args.extend(["--instance-url", instance_url])
         if instance_api_key:
             server_args.extend(["--instance-api-key", instance_api_key])
         
         stdio_server_params = StdioServerParameters(
-            command="python",
+            command="/usr/local/bin/python",
             args=server_args,
         )
         
