@@ -1,0 +1,7 @@
+pyproject.toml
+mcp_crash_course.egg-info/PKG-INFO
+mcp_crash_course.egg-info/SOURCES.txt
+mcp_crash_course.egg-info/dependency_links.txt
+mcp_crash_course.egg-info/requires.txt
+mcp_crash_course.egg-info/top_level.txt
+servers/math_server.py

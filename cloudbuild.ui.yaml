@@ -1,0 +1,15 @@
+steps:
+  # Build the container image
+  - name: 'gcr.io/cloud-builders/docker'
+    args: ['build', '-f', 'Dockerfile.ui', '-t', '$_IMAGE_NAME', '.']
+    
+  # Push the container image to Container Registry
+  - name: 'gcr.io/cloud-builders/docker'
+    args: ['push', '$_IMAGE_NAME']
+
+substitutions:
+  _IMAGE_NAME: gcr.io/mcp-server-468305/mcp-server
+
+images:
+  - '$_IMAGE_NAME'
+
