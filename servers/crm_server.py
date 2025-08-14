@@ -32,9 +32,15 @@ def parse_arguments():
     parser.add_argument('--instance-api-key', type=str, required=True, help='Instance API key for authentication')
     return parser.parse_args()
 
-args = parse_arguments()
-INSTANCE_URL = args.instance_url
-INSTANCE_API_KEY = args.instance_api_key
+# Only parse arguments if this script is run directly
+if __name__ == "__main__":
+    args = parse_arguments()
+    INSTANCE_URL = args.instance_url
+    INSTANCE_API_KEY = args.instance_api_key
+else:
+    # When imported as a module, these will be set by the MCP library
+    INSTANCE_URL = None
+    INSTANCE_API_KEY = None
 
 # FastMCP Initialization
 mcp = FastMCP("crm-server")
@@ -243,91 +249,6 @@ def get_contact_addresses_by_uuid(contact_uuid: str) -> Dict[str, Any]:
         logger.error(f"Error in get_contact_addresses_by_uuid for contact UUID {contact_uuid}: {str(e)}")
         return {"success": False, "error": str(e)}
 
-@mcp.tool()
-def get_company_addresses_by_uuid(company_uuid: str) -> Dict[str, Any]:
-    """
-    Get all addresses for a specific company by their UUID.
-    
-    Args:
-        company_uuid: The UUID of the company to get addresses for
-    
-    Returns:
-        Dictionary with company addresses or error information
-    """
-    logger.info(f"Calling get_company_addresses_by_uuid tool with company UUID: {company_uuid}")
-    
-    if not INSTANCE_URL or not INSTANCE_API_KEY:
-        logger.error("Instance URL and API key not configured for get_contact_addresses_by_uuid")
-        return {
-            "success": False,
-            "error": "Instance URL and API key not configured. Please set CRM_INSTANCE_URL and CRM_INSTANCE_API_KEY environment variables or provide --instance-url and --instance-api-key arguments."
-        }
-
-    # First verify the company exists
-    contact_check = get_company_by_uuid(company_uuid)
-    if not contact_check["success"]:
-        logger.warning(f"Contact with UUID {company_uuid} does not exist")
-        return {
-            "success": False,
-            "error": f"Contact with UUID {company_uuid} does not exist",
-            "contact_check_error": contact_check.get("error")
-        }
-
-    # Get addresses for the contact
-    url = f"{INSTANCE_URL}/crm/api/v2/contacts/addresses/{company_uuid}"
-    headers = {
-        "Authorization": INSTANCE_API_KEY,
-        "Accept": "application/json"
-    }
-
-    try:
-        response = requests.get(url, headers=headers, timeout=30)
-        logger.info(f"get_contact_addresses_by_uuid tool finished. Response status: {response.status_code}")
-        
-        # Check if response is HTML instead of JSON
-        content_type = response.headers.get('content-type', '').lower()
-        if 'text/html' in content_type or response.text.strip().startswith('<'):
-            logger.warning(f"Received HTML response instead of JSON for contact addresses UUID: {contact_uuid}")
-            return {
-                "success": False,
-                "error": f"Received HTML response instead of JSON for contact addresses UUID: {contact_uuid}",
-                "status_code": response.status_code,
-                "content_type": content_type,
-                "response_preview": response.text[:200] + "..." if len(response.text) > 200 else response.text
-            }
-        
-        if response.status_code == 200:
-            try:
-                addresses_data = response.json()
-                logger.info(f"Retrieved {len(addresses_data.get('data', []))} addresses for contact UUID: {contact_uuid}")
-                return {
-                    "success": True,
-                    "contact_uuid": contact_uuid,
-                    "addresses": addresses_data,
-                    "message": f"Retrieved addresses for contact {contact_uuid}"
-                }
-            except json.JSONDecodeError as e:
-                logger.error(f"Failed to parse JSON response for contact addresses UUID: {contact_uuid}. Error: {str(e)}")
-                return {
-                    "success": False,
-                    "error": f"Invalid JSON response for contact addresses UUID: {contact_uuid}",
-                    "status_code": response.status_code,
-                    "response_preview": response.text[:200] + "..." if len(response.text) > 200 else response.text
-                }
-        else:
-            logger.warning(f"Failed to retrieve addresses for contact UUID {contact_uuid}. Status: {response.status_code}, Error: {response.text}")
-            return {
-                "success": False,
-                "status_code": response.status_code,
-                "error": response.text,
-                "content_type": content_type
-            }
-    except requests.exceptions.Timeout:
-        logger.warning(f"Request timed out for get_contact_addresses_by_uuid for contact UUID: {contact_uuid}")
-        return {"success": False, "error": "Request timed out after 30 seconds"}
-    except Exception as e:
-        logger.error(f"Error in get_contact_addresses_by_uuid for contact UUID {contact_uuid}: {str(e)}")
-        return {"success": False, "error": str(e)}
 
 @mcp.tool()
 def get_contact_by_uuid(contact_uuid: str) -> Dict[str, Any]:
