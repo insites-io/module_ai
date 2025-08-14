@@ -817,3 +817,6 @@ def check_entity_exists(endpoint: str, uuid_value: str) -> bool:
 if __name__ == "__main__":
     logger.info("Starting MCP CRM Server...")
     mcp.run(transport="stdio")
+else:
+    # When imported as a module, just log that the module was loaded
+    logger.info("MCP CRM Server module loaded successfully")
