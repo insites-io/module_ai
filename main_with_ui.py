@@ -272,6 +272,17 @@ async def handle_prompt(request: Request):
             except Exception as test_error:
                 print(f"DEBUG: Python test failed: {test_error}")
             
+            # Try to test the actual script execution
+            try:
+                import subprocess
+                script_test_result = subprocess.run(["/usr/local/bin/python", "/app/servers/crm_server.py", "--help"], 
+                                                 capture_output=True, text=True, timeout=10)
+                print(f"DEBUG: Script test result: {script_test_result.stdout}")
+                if script_test_result.stderr:
+                    print(f"DEBUG: Script test stderr: {script_test_result.stderr}")
+            except Exception as script_test_error:
+                print(f"DEBUG: Script test failed: {script_test_error}")
+            
             stdio_server_params = StdioServerParameters(
                 command="/usr/local/bin/python",
                 args=server_args,
