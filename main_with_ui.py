@@ -280,13 +280,31 @@ async def handle_prompt(request: Request):
             # Try to test the actual script execution
             try:
                 import subprocess
-                script_test_result = subprocess.run(["/usr/local/bin/python", "/app/servers/crm_server.py", "--help"], 
-                                                 capture_output=True, text=True, timeout=10)
-                print(f"DEBUG: Script test result: {script_test_result.stdout}")
-                if script_test_result.stderr:
-                    print(f"DEBUG: Script test stderr: {script_test_result.stderr}")
-            except Exception as script_test_error:
-                print(f"DEBUG: Script test failed: {script_test_error}")
+                test_result = subprocess.run(["/usr/local/bin/python", "/app/servers/crm_server.py", "--help"], 
+                                          capture_output=True, text=True, timeout=10)
+                print(f"DEBUG: Script test result: {test_result.stdout}")
+                if test_result.stderr:
+                    print(f"DEBUG: Script test stderr: {test_result.stderr}")
+            except Exception as test_error:
+                print(f"DEBUG: Script test failed: {test_error}")
+            
+            # Try to test the script with actual arguments to see if it crashes
+            try:
+                import subprocess
+                test_args = ["/usr/local/bin/python", "/app/servers/crm_server.py"]
+                if instance_url:
+                    test_args.extend(["--instance-url", instance_url])
+                if instance_api_key:
+                    test_args.extend(["--instance-api-key", instance_api_key])
+                
+                print(f"DEBUG: Testing script with actual args: {test_args}")
+                test_result = subprocess.run(test_args, 
+                                          capture_output=True, text=True, timeout=10)
+                print(f"DEBUG: Script with args result: {test_result.stdout}")
+                if test_result.stderr:
+                    print(f"DEBUG: Script with args stderr: {test_result.stderr}")
+            except Exception as test_error:
+                print(f"DEBUG: Script with args test failed: {test_error}")
             
             stdio_server_params = StdioServerParameters(
                 command="/usr/local/bin/python",
