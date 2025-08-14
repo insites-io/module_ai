@@ -67,16 +67,49 @@ async def lifespan(app: FastAPI):
         # Create a simple agent without tools initially
         app.state.agent = create_react_agent(llm, [])
         print("✅ LLM agent initialized successfully.")
+        
+        # Test the LLM connection
+        try:
+            test_message = await llm.ainvoke("Hello")
+            print("✅ LLM connection test successful")
+        except Exception as test_error:
+            print(f"⚠️ LLM connection test failed: {test_error}")
+            # Don't fail startup for this, but log it
+            
     except Exception as e:
         print(f"❌ Error initializing LLM: {e}")
         import traceback
         traceback.print_exc()
-        raise
+        # Log the error but don't fail startup completely
+        print(f"⚠️ Continuing with startup despite LLM initialization error")
+        app.state.llm = None
+        app.state.agent = None
     
     yield
     
     # Shutdown (if needed)
     print("🛑 Shutting down MCP CRM Server...")
+    try:
+        # Clean up any remaining tasks
+        for task in asyncio.all_tasks():
+            if not task.done():
+                print(f"DEBUG: Cancelling task: {task}")
+                task.cancel()
+    except Exception as cleanup_error:
+        print(f"DEBUG: Error during cleanup: {cleanup_error}")
+
+# Global exception handler for unhandled async errors
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    print(f"DEBUG: Global exception handler caught: {exc}")
+    import traceback
+    traceback.print_exc()
+    return {
+        "success": False,
+        "error": "Internal server error",
+        "detail": str(exc),
+        "timestamp": "2025-08-11T02:30:00Z"
+    }
 
 app = FastAPI(
     title="MCP CRM API with UI",
@@ -191,6 +224,11 @@ async def handle_prompt(request: Request):
     async def run_agent():
         response_text = ""
         try:
+            # Check if LLM is available
+            if not hasattr(app.state, 'llm') or app.state.llm is None:
+                response_text = "Error: LLM not initialized. Please check server logs."
+                return
+                
             # Create server parameters with instance variables as command line arguments
             server_args = ["servers/crm_server.py"]
             if instance_url:
@@ -231,13 +269,29 @@ async def handle_prompt(request: Request):
             print(f"DEBUG: Full traceback: {traceback.format_exc()}")
             response_text = f"An error occurred: {e}"
         finally:
-            # Once the agent is done, put the final message and a stop signal in the queue
-            await message_queues[session_id].put(response_text)
-            await message_queues[session_id].put("END_STREAM")
+            try:
+                # Once the agent is done, put the final message and a stop signal in the queue
+                await message_queues[session_id].put(response_text)
+                await message_queues[session_id].put("END_STREAM")
+            except Exception as queue_error:
+                print(f"DEBUG: Error putting message in queue: {queue_error}")
 
         print(f"Agent completed for session {session_id}: {response_text}")
     
-    asyncio.create_task(run_agent())
+    # Create task with proper error handling
+    task = asyncio.create_task(run_agent())
+    
+    # Add error handler to the task
+    def handle_task_exception(task):
+        try:
+            task.result()
+        except Exception as e:
+            print(f"DEBUG: Task exception handled: {e}")
+            import traceback
+            traceback.print_exc()
+    
+    task.add_done_callback(handle_task_exception)
+    
     return {
         "message": "Request accepted", 
         "session_id": session_id,
@@ -265,6 +319,15 @@ async def direct_query(request: Request):
     print(f"Direct query: {prompt}")
 
     try:
+        # Check if LLM is available
+        if not hasattr(app.state, 'llm') or app.state.llm is None:
+            return {
+                "success": False,
+                "error": "LLM not initialized. Please check server logs.",
+                "prompt": prompt,
+                "timestamp": "2025-08-11T02:30:00Z"
+            }
+            
         # Create server parameters with instance variables as command line arguments
         server_args = ["servers/crm_server.py"]
         if instance_url:
@@ -320,23 +383,37 @@ async def sse_generator(session_id: str):
 
     print(f"Starting SSE stream for session {session_id}")
     
-    # Send an immediate connection confirmation
-    yield f"data: CONNECTED\n\n"
+    try:
+        # Send an immediate connection confirmation
+        yield f"data: CONNECTED\n\n"
 
-    while True:
-        try:
-            message = await message_queues[session_id].get()
-            if message == "END_STREAM":
+        while True:
+            try:
+                message = await message_queues[session_id].get()
+                if message == "END_STREAM":
+                    break
+                yield f"data: {message}\n\n"
+            except asyncio.CancelledError:
+                print(f"SSE stream cancelled for session {session_id}")
                 break
-            yield f"data: {message}\n\n"
-        except asyncio.CancelledError:
-            print(f"SSE stream cancelled for session {session_id}")
-            break
-        
-    print(f"Stream ended for session {session_id}")
-    # Clean up the queue
-    if session_id in message_queues:
-        del message_queues[session_id]
+            except Exception as e:
+                print(f"DEBUG: Error in SSE stream for session {session_id}: {e}")
+                yield f"data: ERROR: {str(e)}\n\n"
+                break
+                
+    except Exception as e:
+        print(f"DEBUG: Critical error in SSE generator for session {session_id}: {e}")
+        import traceback
+        traceback.print_exc()
+        yield f"data: CRITICAL_ERROR: {str(e)}\n\n"
+    finally:
+        print(f"Stream ended for session {session_id}")
+        # Clean up the queue
+        try:
+            if session_id in message_queues:
+                del message_queues[session_id]
+        except Exception as cleanup_error:
+            print(f"DEBUG: Error cleaning up queue for session {session_id}: {cleanup_error}")
 
 @app.get("/sse")
 async def sse(request: Request):
