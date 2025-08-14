@@ -117,6 +117,8 @@
         let isConnected = false;
         let reconnectAttempts = 0;
         const maxReconnectAttempts = 5;
+        let currentResponse = '';
+        let currentMessageContainer = null;
         
         // Global instance configuration
         const INSTANCE_UUID = "6153cf7d-0f2c-47cf-a71a-69e308ff08b3";
@@ -172,7 +174,6 @@
                 eventSource = new EventSource(`/sse?session_id=${sessionId}&instance_url=${INSTANCE_URL}&instance_api_key=${INSTANCE_API_KEY}`);
                 
                 eventSource.onmessage = function(event) {
-                    console.log('Received SSE message:', event.data);
                     
                     if (event.data === "CONNECTED") {
                         // Connection confirmed, enable input
@@ -199,16 +200,36 @@
                         typingIndicator.closest('.message-container').remove();
                     }
                     
-                    addMessage('agent', event.data);
+                    // Handle response chunks
+                    if (event.data !== "CONNECTED" && event.data !== "END_STREAM") {
+                        currentResponse += event.data;
+                 
+                        
+                        // Create or update the message container
+                        if (!currentMessageContainer) {
+                            currentMessageContainer = addMessage('agent', currentResponse);
+                        } else {
+                            // Update the existing message
+                            const messageBubble = currentMessageContainer.querySelector('.message-bubble');
+                            // Convert newlines to <br> tags for proper HTML display
+                            const formattedResponse = currentResponse.replace(/\n/g, '<br>');
+                            messageBubble.innerHTML = `<strong>Assistant:</strong> ${formattedResponse}`;
+                        }
+                    }
+                    
+                    // Reset for next response
+                    if (event.data === "END_STREAM") {
+                        currentResponse = '';
+                        currentMessageContainer = null;
+                    }
                 };
                 
                 eventSource.onopen = function() {
-                    console.log('EventSource connection opened');
                     // Connection opened, but wait for CONNECTED message to confirm
                 };
                 
                 eventSource.onerror = function(err) {
-                    console.error("EventSource failed:", err);
+
                     closeEventSource();
                     isConnected = false;
                     
@@ -236,8 +257,6 @@
         async function sendMessage() {
             const prompt = input.value.trim();
             if (!prompt || !isConnected) return;
-
-            console.log('Sending message with session ID:', sessionId);
 
             // Add user message
             addMessage('user', prompt);

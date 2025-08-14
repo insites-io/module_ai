@@ -37,7 +37,10 @@ try:
     args = parse_arguments()
     INSTANCE_URL = args.instance_url
     INSTANCE_API_KEY = args.instance_api_key
-except SystemExit:
+except SystemExit as e:
+    # If --help or --version is used, let it exit normally
+    if "--help" in sys.argv or "--version" in sys.argv:
+        sys.exit(e.code)
     # If no arguments provided (like when imported), use environment variables or defaults
     INSTANCE_URL = os.getenv("CRM_INSTANCE_URL")
     INSTANCE_API_KEY = os.getenv("CRM_INSTANCE_API_KEY")
@@ -294,79 +297,6 @@ def get_contact_by_uuid(contact_uuid: str) -> Dict[str, Any]:
     try:
         response = requests.get(url, headers=headers, timeout=30)
         logger.info(f"get_contact_by_uuid tool finished. Response status: {response.status_code}")
-        
-        # Check if response is HTML instead of JSON
-        content_type = response.headers.get('content-type', '').lower()
-        if 'text/html' in content_type or response.text.strip().startswith('<'):
-            logger.warning(f"Received HTML response instead of JSON for contact UUID: {contact_uuid}")
-            return {
-                "success": False,
-                "error": f"Received HTML response instead of JSON for contact UUID: {contact_uuid}",
-                "status_code": response.status_code,
-                "content_type": content_type,
-                "response_preview": response.text[:200] + "..." if len(response.text) > 200 else response.text
-            }
-        
-        if response.status_code == 200:
-            try:
-                contact_data = response.json()
-                logger.info(f"Contact retrieved successfully for UUID: {contact_uuid}")
-                return {
-                    "success": True,
-                    "contact": contact_data,
-                    "message": "Contact retrieved successfully"
-                }
-            except json.JSONDecodeError as e:
-                logger.error(f"Failed to parse JSON response for contact UUID: {contact_uuid}. Error: {str(e)}")
-                return {
-                    "success": False,
-                    "error": f"Invalid JSON response for contact UUID: {contact_uuid}",
-                    "status_code": response.status_code,
-                    "response_preview": response.text[:200] + "..." if len(response.text) > 200 else response.text
-                }
-        else:
-            logger.warning(f"Failed to retrieve contact for UUID {contact_uuid}. Status: {response.status_code}, Error: {response.text}")
-            return {
-                "success": False,
-                "status_code": response.status_code,
-                "error": response.text,
-                "content_type": content_type
-            }
-    except requests.exceptions.Timeout:
-        logger.warning(f"Request timed out for get_contact_by_uuid for UUID: {contact_uuid}")
-        return {"success": False, "error": "Request timed out after 30 seconds"}
-    except Exception as e:
-        logger.error(f"Error in get_contact_by_uuid for UUID {contact_uuid}: {str(e)}")
-        return {"success": False, "error": str(e)}
-
-@mcp.tool()
-def get_company_by_uuid(company_uuid: str) -> Dict[str, Any]:
-    """
-    Get detailed information about a specific company by their UUID.
-    
-    Args:
-        company_uuid: The UUID of the company to retrieve
-    
-    Returns:
-        Dictionary with company details or error information
-    """
-    logger.info(f"Calling get_company_by_uuid tool with UUID: {company_uuid}")
-    if not INSTANCE_URL or not INSTANCE_API_KEY:
-        logger.error("Instance URL and API key not configured for get_company_by_uuid")
-        return {
-            "success": False,
-            "error": "Instance URL and API key not configured. Please set CRM_INSTANCE_URL and CRM_INSTANCE_API_KEY environment variables or provide --instance-url and --instance-api-key arguments."
-        }
-
-    url = f"{INSTANCE_URL}/crm/api/v2/companies/{company_uuid}"
-    headers = {
-        "Authorization": INSTANCE_API_KEY,
-        "Accept": "application/json"
-    }
-
-    try:
-        response = requests.get(url, headers=headers, timeout=30)
-        logger.info(f"get_company_by_uuid tool finished. Response status: {response.status_code}")
         
         # Check if response is HTML instead of JSON
         content_type = response.headers.get('content-type', '').lower()

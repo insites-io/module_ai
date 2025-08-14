@@ -30,15 +30,20 @@ GCP_PROJECT_ID = os.getenv("GCP_PROJECT_ID")
 GCP_REGION = os.getenv("GCP_REGION")
 GEMINI_MODEL_NAME = os.getenv("GEMINI_MODEL_NAME", "gemini-1.5-pro")
 
-# Handle credentials - use environment variable if set, otherwise use default credentials
-CREDENTIALS_PATH = os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
-if CREDENTIALS_PATH:
-    # Only set the environment variable if it's explicitly provided
+# Handle credentials - use local vertex-credentials.json file
+CREDENTIALS_PATH = os.path.join(os.path.dirname(__file__), "vertex-credentials.json")
+if os.path.exists(CREDENTIALS_PATH):
     os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = CREDENTIALS_PATH
-    print(f"Using credentials from: {CREDENTIALS_PATH}")
+    print(f"Using local credentials from: {CREDENTIALS_PATH}")
 else:
-    # In Cloud Run, use the default service account credentials
-    print("Using default service account credentials from Cloud Run")
+    # Fallback to environment variable if local file doesn't exist
+    env_credentials = os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
+    if env_credentials:
+        os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = env_credentials
+        print(f"Using credentials from environment: {env_credentials}")
+    else:
+        # In Cloud Run, use the default service account credentials
+        print("Using default service account credentials from Cloud Run")
 
 if not all([GCP_PROJECT_ID, GCP_REGION]):
     raise ValueError("GCP_PROJECT_ID and GCP_REGION must be set.")
@@ -235,7 +240,13 @@ async def handle_prompt(request: Request):
                 return
                 
             # Create server parameters with instance variables as command line arguments
-            server_args = ["/usr/local/bin/python", "/app/servers/crm_server.py"]
+            # Use sys.executable to get the current Python interpreter path
+            import sys
+            import os
+            python_path = sys.executable
+            script_path = os.path.join(os.getcwd(), "servers", "crm_server.py")
+            
+            server_args = [python_path, script_path]
             if instance_url:
                 server_args.extend(["--instance-url", instance_url])
             if instance_api_key:
@@ -244,8 +255,6 @@ async def handle_prompt(request: Request):
             print(f"DEBUG: Starting MCP server with args: {server_args}")
             
             # Debug: Check if the script exists and is executable
-            import os
-            script_path = "/app/servers/crm_server.py"
             if os.path.exists(script_path):
                 print(f"DEBUG: Script exists at {script_path}")
                 if os.access(script_path, os.R_OK):
@@ -266,54 +275,21 @@ async def handle_prompt(request: Request):
                 except Exception as ls_error:
                     print(f"DEBUG: Could not list /app/servers: {ls_error}")
             
-            # Try to test the script execution first
-            try:
-                import subprocess
-                test_result = subprocess.run(["/usr/local/bin/python", "-c", "import sys; print('Python path:', sys.path); print('Python version:', sys.version)"], 
-                                          capture_output=True, text=True, timeout=10)
-                print(f"DEBUG: Python test result: {test_result.stdout}")
-                if test_result.stderr:
-                    print(f"DEBUG: Python test stderr: {test_result.stderr}")
-            except Exception as test_error:
-                print(f"DEBUG: Python test failed: {test_error}")
-            
-            # Try to test the actual script execution
-            try:
-                import subprocess
-                test_result = subprocess.run(["/usr/local/bin/python", "/app/servers/crm_server.py", "--help"], 
-                                          capture_output=True, text=True, timeout=10)
-                print(f"DEBUG: Script test result: {test_result.stdout}")
-                if test_result.stderr:
-                    print(f"DEBUG: Script test stderr: {test_result.stderr}")
-            except Exception as test_error:
-                print(f"DEBUG: Script test failed: {test_error}")
-            
-            # Try to test the script with actual arguments to see if it crashes
-            try:
-                import subprocess
-                test_args = ["/usr/local/bin/python", "/app/servers/crm_server.py"]
-                if instance_url:
-                    test_args.extend(["--instance-url", instance_url])
-                if instance_api_key:
-                    test_args.extend(["--instance-api-key", instance_api_key])
-                
-                print(f"DEBUG: Testing script with actual args: {test_args}")
-                test_result = subprocess.run(test_args, 
-                                          capture_output=True, text=True, timeout=10)
-                print(f"DEBUG: Script with args result: {test_result.stdout}")
-                if test_result.stderr:
-                    print(f"DEBUG: Script with args stderr: {test_result.stderr}")
-            except Exception as test_error:
-                print(f"DEBUG: Script with args test failed: {test_error}")
+            # Simple test to verify Python and script exist
+            print(f"DEBUG: Using Python path: {python_path}")
+            print(f"DEBUG: Using script path: {script_path}")
+            print(f"DEBUG: Script exists: {os.path.exists(script_path)}")
+            print(f"DEBUG: Script readable: {os.access(script_path, os.R_OK)}")
+            print(f"DEBUG: Script executable: {os.access(script_path, os.X_OK)}")
             
             stdio_server_params = StdioServerParameters(
-                command="/usr/local/bin/python",
-                args=server_args,
+                command=python_path,
+                args=server_args[1:],  # Remove the first argument (python_path) since it's already in command
             )
             
-            print(f"DEBUG: About to start stdio client")
+            print(f"DEBUG: About to start stdio client with params: {stdio_server_params}")
             async with stdio_client(stdio_server_params) as (read, write):
-                print(f"DEBUG: stdio client started")
+                print(f"DEBUG: stdio client started successfully")
                 try:
                     async with ClientSession(read_stream=read, write_stream=write) as session:
                         print(f"DEBUG: ClientSession created")
@@ -350,8 +326,12 @@ async def handle_prompt(request: Request):
             response_text = f"An error occurred: {e}"
         finally:
             try:
-                # Once the agent is done, put the final message and a stop signal in the queue
+                # Send the full response as one piece for testing
+                print(f"DEBUG: Total response length: {len(response_text)}")
+                print(f"DEBUG: Response text: {repr(response_text)}")
+                print(f"DEBUG: Sending full response to queue")
                 await message_queues[session_id].put(response_text)
+                
                 await message_queues[session_id].put("END_STREAM")
             except Exception as queue_error:
                 print(f"DEBUG: Error putting message in queue: {queue_error}")
@@ -494,9 +474,17 @@ async def sse_generator(session_id: str):
         while True:
             try:
                 message = await message_queues[session_id].get()
+                print(f"DEBUG: SSE generator received message: {repr(message)}")
                 if message == "END_STREAM":
+                    print(f"DEBUG: SSE generator received END_STREAM")
                     break
-                yield f"data: {message}\n\n"
+                print(f"DEBUG: SSE generator yielding chunk: {repr(message)}")
+                # Properly format SSE data - escape newlines and ensure proper formatting
+                # Replace newlines with spaces for SSE compatibility
+                escaped_message = message.replace('\n', ' ')
+                yield f"data: {escaped_message}\n\n"
+                # Add a small delay to ensure the chunk is sent
+                await asyncio.sleep(0.01)
             except asyncio.CancelledError:
                 print(f"SSE stream cancelled for session {session_id}")
                 break
