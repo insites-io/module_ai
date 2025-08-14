@@ -42,8 +42,24 @@ else:
     INSTANCE_URL = None
     INSTANCE_API_KEY = None
 
-# FastMCP Initialization
-mcp = FastMCP("crm-server")
+# FastMCP Initialization - lazy load to avoid hanging during import
+_mcp_instance = None
+
+def get_mcp():
+    global _mcp_instance
+    if _mcp_instance is None:
+        _mcp_instance = FastMCP("crm-server")
+    return _mcp_instance
+
+# Create a proxy object that delegates to the actual FastMCP instance
+class MCPProxy:
+    def tool(self, *args, **kwargs):
+        return get_mcp().tool(*args, **kwargs)
+    
+    def run(self, *args, **kwargs):
+        return get_mcp().run(*args, **kwargs)
+
+mcp = MCPProxy()
 
 # Utility: API Request
 def fetch_api_data(endpoint: str) -> Dict[str, Any]:
@@ -816,7 +832,16 @@ def check_entity_exists(endpoint: str, uuid_value: str) -> bool:
 # -------------------------
 if __name__ == "__main__":
     logger.info("Starting MCP CRM Server...")
-    mcp.run(transport="stdio")
+    logger.info(f"INSTANCE_URL: {INSTANCE_URL}")
+    logger.info(f"INSTANCE_API_KEY: {INSTANCE_API_KEY[:10] if INSTANCE_API_KEY else 'None'}...")
+    logger.info("About to call mcp.run(transport='stdio')")
+    try:
+        mcp.run(transport="stdio")
+        logger.info("mcp.run completed successfully")
+    except Exception as e:
+        logger.error(f"Error in mcp.run: {e}")
+        import traceback
+        logger.error(f"Traceback: {traceback.format_exc()}")
 else:
     # When imported as a module, just log that the module was loaded
     logger.info("MCP CRM Server module loaded successfully")
