@@ -55,13 +55,12 @@ math_server.log
 logs/
 *.log.*
 
-# Docker
+# Docker (keep Dockerfiles but exclude docker-compose and .dockerignore)
 .dockerignore
-Dockerfile*
 docker-compose*.yml
 .docker/
 
-# Deployment and Build Files
+# Deployment and Build Scripts (exclude these as they're deployment-specific)
 deploy*.sh
 start*.sh
 cloudbuild*.yaml
