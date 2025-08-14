@@ -1,0 +1,293 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MCP Math Agent Demo</title>
+    <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
+    <style>
+        .typing-indicator {
+            display: inline-block;
+            width: 20px;
+            height: 20px;
+            border: 3px solid #f3f3f3;
+            border-top: 3px solid #3498db;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        .message-container {
+            display: flex;
+            margin-bottom: 1rem;
+        }
+        .message-container.user {
+            justify-content: flex-end;
+        }
+        .message-container.agent {
+            justify-content: flex-start;
+        }
+        .message-bubble {
+            max-width: 80%;
+            padding: 0.75rem 1rem;
+            border-radius: 1rem;
+            word-wrap: break-word;
+        }
+        .message-bubble.user {
+            background-color: #3b82f6;
+            color: white;
+            border-bottom-right-radius: 0.25rem;
+        }
+        .message-bubble.agent {
+            background-color: #f3f4f6;
+            color: #1f2937;
+            border-bottom-left-radius: 0.25rem;
+        }
+        .message-bubble.system {
+            background-color: #fef3c7;
+            color: #92400e;
+            border-bottom-left-radius: 0.25rem;
+        }
+        .tool-info {
+            background-color: #dbeafe;
+            border: 1px solid #93c5fd;
+            border-radius: 0.5rem;
+            padding: 0.5rem;
+            margin-top: 0.5rem;
+            font-size: 0.875rem;
+            color: #1e40af;
+        }
+    </style>
+</head>
+<body class="bg-gray-50 min-h-screen">
+    <div class="container mx-auto px-4 py-8 max-w-4xl">
+        <div class="bg-white rounded-lg shadow-lg overflow-hidden">
+            <!-- Header -->
+            <div class="bg-gradient-to-r from-blue-600 to-purple-600 text-white p-6">
+                <h1 class="text-3xl font-bold text-center">Insites AI Assistant</h1>
+                <p class="text-center mt-2 opacity-90">Ask me to perform CRM tasks!!</p>
+            </div>
+
+            <!-- Chat Container -->
+            <div class="h-96 overflow-y-auto p-4 bg-gray-50" id="chat-container">
+                <div id="messages">
+                    <div class="message-container agent">
+                        <div class="message-bubble agent">
+                            <strong>Assistant:</strong> Hello! I'm powered by MCP tools. I can help you with:
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Input Area -->
+            <div class="p-4 border-t border-gray-200 bg-white">
+                <div class="flex space-x-2">
+                    <input 
+                        type="text" 
+                        id="prompt-input"
+                        class="flex-grow p-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                        disabled
+                    >
+                    <button 
+                        id="send-button" 
+                        class="bg-blue-600 text-white px-6 py-3 rounded-lg hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed"
+                        disabled
+                    >
+                        Send
+                    </button>
+                </div>
+                <div class="mt-2 text-sm text-gray-500">
+                    <span id="connection-status">Connecting to server...</span>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const input = document.getElementById('prompt-input');
+        const sendButton = document.getElementById('send-button');
+        const messagesDiv = document.getElementById('messages');
+        const connectionStatus = document.getElementById('connection-status');
+
+        let eventSource;
+        let sessionId;
+        let isStreaming = false;
+        let isConnected = false;
+        let reconnectAttempts = 0;
+        const maxReconnectAttempts = 5;
+        
+        // Global instance configuration
+        const INSTANCE_UUID = "6153cf7d-0f2c-47cf-a71a-69e308ff08b3";
+        const INSTANCE_URL = "https://iia-eric-v2.staging.oregon.platform-os.com";
+        const INSTANCE_API_KEY = "instance_6153cf7d-0f2c-47cf-a71a-69e308ff08b3_PEpn2gnKf1BVeVHmeJfIufnsiam72sl_s5LsfoxmnFQ";
+
+        function addMessage(sender, text, isTyping = false) {
+            const messageContainer = document.createElement('div');
+            messageContainer.className = `message-container ${sender}`;
+            
+            const messageBubble = document.createElement('div');
+            messageBubble.className = `message-bubble ${sender}`;
+            
+            if (isTyping) {
+                messageBubble.innerHTML = `
+                    <strong>Assistant:</strong> 
+                    <span class="typing-indicator"></span>
+                    <span>Processing your request...</span>
+                `;
+            } else {
+                messageBubble.innerHTML = `<strong>${sender === 'user' ? 'You' : sender === 'agent' ? 'Assistant' : 'System'}:</strong> ${text}`;
+            }
+            
+            messageContainer.appendChild(messageBubble);
+            messagesDiv.appendChild(messageContainer);
+            messagesDiv.scrollTop = messagesDiv.scrollHeight;
+            
+            return messageContainer;
+        }
+
+        function updateConnectionStatus(status, isError = false) {
+            connectionStatus.textContent = status;
+            connectionStatus.className = `mt-2 text-sm ${isError ? 'text-red-500' : 'text-green-500'}`;
+        }
+
+        function closeEventSource() {
+            if (eventSource) {
+                eventSource.close();
+                eventSource = null;
+                isStreaming = false;
+            }
+        }
+
+        async function startStreaming() {
+            closeEventSource();
+            
+            // Always generate a new session ID for each connection
+            sessionId = 'session-' + Math.random().toString(36).substr(2, 9);
+            console.log('Generated session ID:', sessionId);
+            
+            try {
+                updateConnectionStatus("Connecting to server...", false);
+                eventSource = new EventSource(`/sse?session_id=${sessionId}&instance_url=${INSTANCE_URL}&instance_api_key=${INSTANCE_API_KEY}`);
+                
+                eventSource.onmessage = function(event) {
+                    console.log('Received SSE message:', event.data);
+                    
+                    if (event.data === "CONNECTED") {
+                        // Connection confirmed, enable input
+                        isStreaming = true;
+                        isConnected = true;
+                        reconnectAttempts = 0;
+                        updateConnectionStatus("Connected to server", false);
+                        input.disabled = false;
+                        sendButton.disabled = false;
+                        return;
+                    }
+                    
+                    if (event.data === "END_STREAM") {
+                        // Don't close the connection, just mark as ready for next message
+                        isStreaming = false;
+                        updateConnectionStatus("Ready for new requests", false);
+                        reconnectAttempts = 0; // Reset reconnect attempts on successful message
+                        return;
+                    }
+                    
+                    // Remove typing indicator if it exists
+                    const typingIndicator = document.querySelector('.typing-indicator');
+                    if (typingIndicator) {
+                        typingIndicator.closest('.message-container').remove();
+                    }
+                    
+                    addMessage('agent', event.data);
+                };
+                
+                eventSource.onopen = function() {
+                    console.log('EventSource connection opened');
+                    // Connection opened, but wait for CONNECTED message to confirm
+                };
+                
+                eventSource.onerror = function(err) {
+                    console.error("EventSource failed:", err);
+                    closeEventSource();
+                    isConnected = false;
+                    
+                    if (reconnectAttempts < maxReconnectAttempts) {
+                        reconnectAttempts++;
+                        updateConnectionStatus(`Connection lost. Reconnecting... (${reconnectAttempts}/${maxReconnectAttempts})`, true);
+                        
+                        // Try to reconnect after a short delay
+                        setTimeout(() => {
+                            startStreaming();
+                        }, 1000);
+                    } else {
+                        updateConnectionStatus("Connection failed. Please refresh the page.", true);
+                        input.disabled = true;
+                        sendButton.disabled = true;
+                    }
+                };
+                
+            } catch (error) {
+                console.error("Failed to start streaming:", error);
+                updateConnectionStatus("Failed to connect to server", true);
+            }
+        }
+
+        async function sendMessage() {
+            const prompt = input.value.trim();
+            if (!prompt || !isConnected) return;
+
+            console.log('Sending message with session ID:', sessionId);
+
+            // Add user message
+            addMessage('user', prompt);
+            input.value = '';
+            
+            // Add typing indicator
+            addMessage('agent', '', true);
+
+            try {
+                updateConnectionStatus("Processing request...", false);
+                
+                const response = await fetch(`/messages?session_id=${sessionId}&instance_url=${INSTANCE_URL}&instance_api_key=${INSTANCE_API_KEY}`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ prompt: prompt })
+                });
+
+                if (!response.ok) {
+                    const error = await response.json();
+                    addMessage('system', `Error: ${error.detail || 'Failed to send message'}`);
+                    updateConnectionStatus("Error occurred", true);
+                } else {
+                    updateConnectionStatus("Request sent successfully", false);
+                }
+
+            } catch (error) {
+                console.error("Network error:", error);
+                addMessage('system', `Network error: ${error.message}`);
+                updateConnectionStatus("Network error occurred", true);
+            }
+        }
+
+        // Event listeners
+        sendButton.addEventListener('click', sendMessage);
+        input.addEventListener('keypress', (event) => {
+            if (event.key === 'Enter' && !event.shiftKey) {
+                event.preventDefault();
+                sendMessage();
+            }
+        });
+
+        // Handle page visibility changes to reconnect if needed
+        document.addEventListener('visibilitychange', () => {
+            if (!document.hidden && !isConnected) {
+                startStreaming();
+            }
+        });
+
+        // Initialize connection
+        startStreaming();
+    </script>
+</body>
+</html>

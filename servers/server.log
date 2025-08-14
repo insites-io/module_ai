@@ -1,0 +1,3 @@
+usage: crm_server.py [-h] --instance-url INSTANCE_URL
+                     --instance-api-key INSTANCE_API_KEY
+crm_server.py: error: the following arguments are required: --instance-url, --instance-api-key
