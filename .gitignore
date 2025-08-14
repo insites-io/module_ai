@@ -63,6 +63,7 @@ docker-compose*.yml
 # Deployment and Build Scripts (exclude these as they're deployment-specific)
 deploy*.sh
 start*.sh
+setup-credentials.sh
 cloudbuild*.yaml
 *.yaml.bak
 *.yml.bak
