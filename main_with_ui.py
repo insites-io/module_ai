@@ -30,10 +30,15 @@ GCP_PROJECT_ID = os.getenv("GCP_PROJECT_ID")
 GCP_REGION = os.getenv("GCP_REGION")
 GEMINI_MODEL_NAME = os.getenv("GEMINI_MODEL_NAME", "gemini-1.5-pro")
 
-# Handle credentials - use environment variable if set, otherwise use local credentials file
-CREDENTIALS_PATH = os.getenv("GOOGLE_APPLICATION_CREDENTIALS", "./vertex-credentials.json")
-os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = CREDENTIALS_PATH
-print(f"Using credentials from: {CREDENTIALS_PATH}")
+# Handle credentials - use environment variable if set, otherwise use default credentials
+CREDENTIALS_PATH = os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
+if CREDENTIALS_PATH:
+    # Only set the environment variable if it's explicitly provided
+    os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = CREDENTIALS_PATH
+    print(f"Using credentials from: {CREDENTIALS_PATH}")
+else:
+    # In Cloud Run, use the default service account credentials
+    print("Using default service account credentials from Cloud Run")
 
 if not all([GCP_PROJECT_ID, GCP_REGION]):
     raise ValueError("GCP_PROJECT_ID and GCP_REGION must be set.")
