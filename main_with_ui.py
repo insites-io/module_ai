@@ -261,14 +261,23 @@ async def handle_prompt(request: Request):
                 except Exception as ls_error:
                     print(f"DEBUG: Could not list /app/servers: {ls_error}")
             
+            # Try to test the script execution first
+            try:
+                import subprocess
+                test_result = subprocess.run(["/usr/local/bin/python", "-c", "import sys; print('Python path:', sys.path); print('Python version:', sys.version)"], 
+                                          capture_output=True, text=True, timeout=10)
+                print(f"DEBUG: Python test result: {test_result.stdout}")
+                if test_result.stderr:
+                    print(f"DEBUG: Python test stderr: {test_result.stderr}")
+            except Exception as test_error:
+                print(f"DEBUG: Python test failed: {test_error}")
+            
             stdio_server_params = StdioServerParameters(
                 command="/usr/local/bin/python",
                 args=server_args,
             )
             
             print(f"DEBUG: About to start stdio client")
-            
-            # Create a new MCP session for this request
             async with stdio_client(stdio_server_params) as (read, write):
                 print(f"DEBUG: stdio client started")
                 try:
@@ -288,13 +297,8 @@ async def handle_prompt(request: Request):
                             print(f"DEBUG: Failed to load MCP tools: {tools_error}")
                             raise Exception(f"Failed to load MCP tools: {tools_error}")
                         
-                        # Create agent with tools for this request
                         agent = create_react_agent(app.state.llm, tools)
-                        
-                        # ainvoke returns a dictionary
-                        result = await agent.ainvoke(
-                            {"messages": [HumanMessage(content=prompt)]}
-                        )
+                        result = await agent.ainvoke({"messages": [HumanMessage(content=prompt)]})
                         response_text = result["messages"][-1].content
                 except Exception as session_error:
                     print(f"DEBUG: MCP session error: {session_error}")
