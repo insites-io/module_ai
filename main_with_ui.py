@@ -248,21 +248,40 @@ async def handle_prompt(request: Request):
             # Create a new MCP session for this request
             async with stdio_client(stdio_server_params) as (read, write):
                 print(f"DEBUG: stdio client started")
-                async with ClientSession(read_stream=read, write_stream=write) as session:
-                    print(f"DEBUG: ClientSession created")
-                    await session.initialize()
-                    print(f"DEBUG: Session initialized")
-                    tools = await load_mcp_tools(session)
-                    print(f"DEBUG: Loaded {len(tools)} tools")
-                    
-                    # Create agent with tools for this request
-                    agent = create_react_agent(app.state.llm, tools)
-                    
-                    # ainvoke returns a dictionary
-                    result = await agent.ainvoke(
-                        {"messages": [HumanMessage(content=prompt)]}
-                    )
-                    response_text = result["messages"][-1].content
+                try:
+                    async with ClientSession(read_stream=read, write_stream=write) as session:
+                        print(f"DEBUG: ClientSession created")
+                        try:
+                            await session.initialize()
+                            print(f"DEBUG: Session initialized")
+                        except Exception as init_error:
+                            print(f"DEBUG: Session initialization failed: {init_error}")
+                            raise Exception(f"MCP session initialization failed: {init_error}")
+                        
+                        try:
+                            tools = await load_mcp_tools(session)
+                            print(f"DEBUG: Loaded {len(tools)} tools")
+                        except Exception as tools_error:
+                            print(f"DEBUG: Failed to load MCP tools: {tools_error}")
+                            raise Exception(f"Failed to load MCP tools: {tools_error}")
+                        
+                        # Create agent with tools for this request
+                        agent = create_react_agent(app.state.llm, tools)
+                        
+                        # ainvoke returns a dictionary
+                        result = await agent.ainvoke(
+                            {"messages": [HumanMessage(content=prompt)]}
+                        )
+                        response_text = result["messages"][-1].content
+                except Exception as session_error:
+                    print(f"DEBUG: MCP session error: {session_error}")
+                    raise session_error
+        except ExceptionGroup as eg:
+            import traceback
+            print(f"DEBUG: ExceptionGroup occurred: {eg}")
+            print(f"DEBUG: ExceptionGroup exceptions: {eg.exceptions}")
+            print(f"DEBUG: Full traceback: {traceback.format_exc()}")
+            response_text = f"An error occurred: {eg}"
         except Exception as e:
             import traceback
             print(f"DEBUG: Error occurred: {e}")
@@ -342,26 +361,50 @@ async def direct_query(request: Request):
         
         # Create a new MCP session for this request
         async with stdio_client(stdio_server_params) as (read, write):
-            async with ClientSession(read_stream=read, write_stream=write) as session:
-                await session.initialize()
-                tools = await load_mcp_tools(session)
+            try:
+                async with ClientSession(read_stream=read, write_stream=write) as session:
+                    try:
+                        await session.initialize()
+                    except Exception as init_error:
+                        print(f"DEBUG: Session initialization failed: {init_error}")
+                        raise Exception(f"MCP session initialization failed: {init_error}")
+                    
+                    try:
+                        tools = await load_mcp_tools(session)
+                    except Exception as tools_error:
+                        print(f"DEBUG: Failed to load MCP tools: {tools_error}")
+                        raise Exception(f"Failed to load MCP tools: {tools_error}")
+                    
+                    # Create agent with tools for this request
+                    agent = create_react_agent(app.state.llm, tools)
+                    
+                    # ainvoke returns a dictionary
+                    result = await agent.ainvoke(
+                        {"messages": [HumanMessage(content=prompt)]}
+                    )
+                    response_text = result["messages"][-1].content
+                    
+                    return {
+                        "success": True,
+                        "response": response_text,
+                        "prompt": prompt,
+                        "timestamp": "2025-08-11T02:30:00Z"
+                    }
+            except Exception as session_error:
+                print(f"DEBUG: MCP session error: {session_error}")
+                raise session_error
                 
-                # Create agent with tools for this request
-                agent = create_react_agent(app.state.llm, tools)
-                
-                # ainvoke returns a dictionary
-                result = await agent.ainvoke(
-                    {"messages": [HumanMessage(content=prompt)]}
-                )
-                response_text = result["messages"][-1].content
-                
-                return {
-                    "success": True,
-                    "response": response_text,
-                    "prompt": prompt,
-                    "timestamp": "2025-08-11T02:30:00Z"
-                }
-                
+    except ExceptionGroup as eg:
+        import traceback
+        print(f"ExceptionGroup in direct query: {eg}")
+        print(f"ExceptionGroup exceptions: {eg.exceptions}")
+        print(f"Full traceback: {traceback.format_exc()}")
+        return {
+            "success": False,
+            "error": f"ExceptionGroup: {eg}",
+            "prompt": prompt,
+            "timestamp": "2025-08-11T02:30:00Z"
+        }
     except Exception as e:
         import traceback
         print(f"Error in direct query: {e}")
