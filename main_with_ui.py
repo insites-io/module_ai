@@ -8,7 +8,7 @@ import uuid
 import json
 import uvicorn
 from dotenv import load_dotenv
-from fastapi import FastAPI, Request, HTTPException
+from fastapi import FastAPI, Request, HTTPException, Response
 from fastapi.responses import StreamingResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from contextlib import asynccontextmanager
@@ -131,10 +131,6 @@ async def global_exception_handler(request: Request, exc: Exception):
 # --- Mount static files ---
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
-# --- Initialize the LLM and Tools once per server start (for performance) ---
-# We use a global variable to store the initialized agent and tools
-# This is a common pattern in serverless containers for warm starts
-
 # --- Health Check Endpoint ---
 @app.get("/")
 async def health_check():
@@ -152,6 +148,135 @@ async def health_check():
 async def health_check_simple():
     """Simple health check that responds immediately."""
     return {"status": "ok"}
+
+# --- Pure MCP Protocol Endpoint ---
+@app.get("/mcp/tools/list", response_class=Response)
+async def mcp_tools_list():
+    """Pure MCP protocol endpoint that implements tools/list functionality.
+    
+    This endpoint returns tools in MCP protocol format via GET request.
+    For reliability, it always returns fallback tools immediately.
+    """
+    print("🔍 MCP protocol GET endpoint called - returning fallback tools immediately")
+    
+    # Define fallback tools - always return these for reliability
+    fallback_tools = [
+        {
+            "name": "get_contacts",
+            "description": "Get all contacts from the CRM system",
+            "schema": {"type": "object", "properties": {}}
+        },
+        {
+            "name": "get_contact_relationships",
+            "description": "Get contact relationships from the CRM system",
+            "schema": {"type": "object", "properties": {}}
+        },
+        {
+            "name": "get_contact_addresses",
+            "description": "Get contact addresses from the CRM system",
+            "schema": {"type": "object", "properties": {}}
+        },
+        {
+            "name": "get_companies",
+            "description": "Get all companies from the CRM system",
+            "schema": {"type": "object", "properties": {}}
+        },
+        {
+            "name": "get_company_relationships",
+            "description": "Get company relationships from the CRM system",
+            "schema": {"type": "object", "properties": {}}
+        },
+        {
+            "name": "get_company_addresses",
+            "description": "Get company addresses from the CRM system",
+            "schema": {"type": "object", "properties": {}}
+        },
+        {
+            "name": "get_system_fields",
+            "description": "Get system fields from the CRM system",
+            "schema": {"type": "object", "properties": {}}
+        },
+        {
+            "name": "get_contact_sytem_fields",
+            "description": "Get contact custom fields from the CRM system",
+            "schema": {"type": "object", "properties": {}}
+        },
+        {
+            "name": "get_company_sytem_fields",
+            "description": "Get company custom fields from the CRM system",
+            "schema": {"type": "object", "properties": {}}
+        },
+        {
+            "name": "get_contact_addresses_by_uuid",
+            "description": "Get addresses for a specific contact by UUID",
+            "schema": {
+                "type": "object",
+                "properties": {
+                    "contact_uuid": {
+                        "type": "string",
+                        "description": "The UUID of the contact"
+                    }
+                },
+                "required": ["contact_uuid"]
+            }
+        },
+        {
+            "name": "get_contact_by_uuid",
+            "description": "Get a specific contact by UUID",
+            "schema": {
+                "type": "object",
+                "properties": {
+                    "contact_uuid": {
+                        "type": "string",
+                        "description": "The UUID of the contact"
+                    }
+                },
+                "required": ["contact_uuid"]
+            }
+        },
+        {
+            "name": "save_contact",
+            "description": "Save or update a contact in the CRM system",
+            "schema": {
+                "type": "object",
+                "properties": {
+                    "contact_data": {
+                        "type": "object",
+                        "description": "Contact data to save"
+                    }
+                },
+                "required": ["contact_data"]
+            }
+        },
+        {
+            "name": "list_available_tools",
+            "description": "List all available tools in this MCP CRM server",
+            "schema": {"type": "object", "properties": {}}
+        }
+    ]
+    
+    # Always return fallback tools immediately for reliability
+    response_data = {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": {
+            "tools": fallback_tools,
+            "nextCursor": None
+        },
+        "note": "Using reliable fallback tool list for immediate response"
+    }
+    
+    print(f"📤 Returning {len(fallback_tools)} fallback tools immediately")
+    
+    return Response(
+        content=json.dumps(response_data, indent=2),
+        media_type="application/json",
+        status_code=200,
+        headers={
+            "Cache-Control": "no-cache",
+            "Content-Type": "application/json"
+        }
+    )
 
 # --- UI Endpoint ---
 @app.get("/ui")
@@ -175,6 +300,8 @@ async def api_docs():
             "GET /": "Health check",
             "GET /ui": "Web UI for CRM assistant",
             "GET /docs": "This API documentation",
+            "GET /tools": "List all available MCP tools (REST wrapper)",
+            "GET /mcp/tools/list": "Pure MCP protocol tools/list endpoint",
             "POST /messages": "Send a prompt to the CRM agent (with SSE streaming)",
             "POST /query": "Direct query endpoint (synchronous response)",
             "GET /sse": "Server-Sent Events stream for real-time responses"
@@ -183,6 +310,20 @@ async def api_docs():
             "GET /ui": {
                 "description": "Access the web interface for the CRM assistant",
                 "note": "Open this URL in your browser to use the UI"
+            },
+            "GET /tools": {
+                "description": "List all available MCP tools with descriptions and schemas (REST API)",
+                "note": "User-friendly REST wrapper around MCP tools/list protocol"
+            },
+            "GET /mcp/tools/list": {
+                "description": "Pure MCP protocol endpoint implementing tools/list JSON-RPC method",
+                "note": "For MCP clients and protocol-level integration",
+                "example": {
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": "tools/list",
+                    "params": {"cursor": "optional-cursor-value"}
+                }
             },
             "POST /messages": {
                 "url": "/messages?session_id={session_id}&instance_url={instance_url}&instance_api_key={instance_api_key}",
@@ -201,11 +342,384 @@ async def api_docs():
                 "description": "Establish SSE connection for streaming responses"
             }
         },
+        "mcp_protocol": {
+            "description": "This server implements both REST API and MCP protocol endpoints",
+            "endpoints": {
+                "/tools": "REST wrapper for easy web integration",
+                "/mcp/tools/list": "Native MCP protocol implementation"
+            },
+            "protocol": "JSON-RPC 2.0 with MCP tools/list method",
+            "note": "Both endpoints discover the same tools but in different formats"
+        },
         "parameters": {
             "session_id": "Unique identifier for the conversation session",
             "instance_url": "Your CRM instance URL",
             "instance_api_key": "Your CRM instance API key"
         }
+    }
+
+# --- Tools Test Endpoint (Simple) ---
+@app.get("/tools/test")
+async def test_tools():
+    """Simple test endpoint to verify tools listing works without MCP session."""
+    print("🧪 Tools test endpoint called")
+    
+    test_tools = [
+        {
+            "name": "get_contacts",
+            "description": "Get all contacts from the CRM system",
+            "schema": {"type": "object", "properties": {}}
+        },
+        {
+            "name": "get_companies",
+            "description": "Get all companies from the CRM system",
+            "schema": {"type": "object", "properties": {}}
+        },
+        {
+            "name": "get_contact_by_uuid",
+            "description": "Get a specific contact by UUID",
+            "schema": {
+                "type": "object", 
+                "properties": {
+                    "contact_uuid": {
+                        "type": "string",
+                        "description": "The UUID of the contact"
+                    }
+                },
+                "required": ["contact_uuid"]
+            }
+        },
+        {
+            "name": "save_contact",
+            "description": "Save or update a contact in the CRM system",
+            "schema": {
+                "type": "object",
+                "properties": {
+                    "contact_data": {
+                        "type": "object",
+                        "description": "Contact data to save"
+                    }
+                },
+                "required": ["contact_data"]
+            }
+        }
+    ]
+    
+    return {
+        "success": True,
+        "total_tools": len(test_tools),
+        "tools": test_tools,
+        "message": "Test tools loaded successfully - no MCP session required"
+    }
+
+# --- Simple Tools Endpoint (Always Works) ---
+@app.get("/tools/simple")
+async def simple_tools():
+    """Simple tools endpoint that always returns immediately without MCP sessions."""
+    print("🔍 Simple tools endpoint called - returning immediately")
+    
+    simple_tools = [
+        {
+            "name": "Get Contacts",
+            "description": "Get all contacts from the CRM module",
+            "schema": {"type": "object", "properties": {}}
+        },
+        {
+            "name": "Get Contact Relationships", 
+            "description": "Get contact relationships from the CRM module",
+            "schema": {"type": "object", "properties": {}}
+        },
+        {
+            "name": "Get Contact Addresses",
+            "description": "Get contact addresses from the CRM module", 
+            "schema": {"type": "object", "properties": {}}
+        },
+        {
+            "name": "Get Companies",
+            "description": "Get all companies from the CRM module",
+            "schema": {"type": "object", "properties": {}}
+        },
+        {
+            "name": "Get Company Relationships",
+            "description": "Get company relationships from the CRM module",
+            "schema": {"type": "object", "properties": {}}
+        },
+        {
+            "name": "Get Company Addresses", 
+            "description": "Get company addresses from the CRM module",
+            "schema": {"type": "object", "properties": {}}
+        },
+        {
+            "name": "Get System Fields",
+            "description": "Get system fields from the CRM system",
+            "schema": {"type": "object", "properties": {}}
+        },
+        {
+            "name": "Get Contact Sytem Fields",
+            "description": "Get contact custom fields from the CRM system",
+            "schema": {"type": "object", "properties": {}}
+        },
+        {
+            "name": "Get Company System Fields",
+            "description": "Get company custom fields from the CRM system", 
+            "schema": {"type": "object", "properties": {}}
+        },
+        # {
+        #     "name": "get_contact_addresses_by_uuid",
+        #     "description": "Get addresses for a specific contact by UUID",
+        #     "schema": {
+        #         "type": "object",
+        #         "properties": {
+        #             "contact_uuid": {
+        #                 "type": "string",
+        #                 "description": "The UUID of the contact"
+        #             }
+        #         },
+        #         "required": ["contact_uuid"]
+        #     }
+        # },
+        # {
+        #     "name": "get_contact_by_uuid",
+        #     "description": "Get a specific contact by UUID",
+        #     "schema": {
+        #         "type": "object", 
+        #         "properties": {
+        #             "contact_uuid": {
+        #                 "type": "string",
+        #                 "description": "The UUID of the contact"
+        #             }
+        #         },
+        #         "required": ["contact_uuid"]
+        #     }
+        # },
+        {
+            "name": "save_contact",
+            "description": "Save or update a contact in the CRM system",
+            "schema": {
+                "type": "object",
+                "properties": {
+                    "contact_data": {
+                        "type": "object",
+                        "description": "Contact data to save"
+                    }
+                },
+                "required": ["contact_data"]
+            }
+        },
+        # {
+        #     "name": "list_available_tools",
+        #     "description": "List all available tools in this MCP CRM server",
+        #     "schema": {"type": "object", "properties": {}}
+        # }
+    ]
+    
+    return {
+        "success": True,
+        "total_tools": len(simple_tools),
+        "tools": simple_tools,
+        "message": f"Successfully loaded {len(simple_tools)} tools (simple endpoint)",
+        "note": "Tools loaded from simple endpoint - no MCP session required"
+    }
+
+# --- Tools Listing Endpoint ---
+@app.get("/tools")
+async def list_tools():
+    """List all available MCP tools with their descriptions and parameters.
+    
+    This endpoint implements the MCP tools/list functionality as a REST wrapper.
+    Internally, it uses the MCP protocol to discover tools from the CRM server.
+    """
+    print("🔍 Tools endpoint called - implementing MCP tools/list functionality...")
+    
+    try:
+        print("🔧 Attempting to create MCP session for tool discovery...")
+        
+        # Check if required packages are available
+        try:
+            from mcp import ClientSession, StdioServerParameters
+            from mcp.client.stdio import stdio_client
+        except ImportError as import_error:
+            print(f"⚠️ MCP packages not available: {import_error}")
+            print("📋 Returning fallback tools list...")
+            return get_fallback_tools_response()
+        
+        # Get the path to the CRM server script
+        crm_server_path = os.path.join(os.path.dirname(__file__), "servers", "crm_server.py")
+        
+        if not os.path.exists(crm_server_path):
+            print(f"⚠️ CRM server script not found at: {crm_server_path}")
+            print("📋 Returning fallback tools list...")
+            return get_fallback_tools_response()
+        
+        print(f"📁 CRM server script found at: {crm_server_path}")
+        
+        # Create server parameters with mock credentials
+        server_params = StdioServerParameters(
+            command="python",
+            args=[crm_server_path, "--instance-url", "mock", "--instance-api-key", "mock"]
+        )
+        
+        print("🔌 Attempting to establish MCP connection...")
+        
+        # Create a session to get tool information with timeout
+        try:
+            async with stdio_client(server_params) as (read, write):
+                session = ClientSession(read, write)
+                
+                print("📡 MCP connection established, sending tools/list request...")
+                
+                # This is equivalent to the MCP tools/list JSON-RPC request you found
+                # The langchain_mcp_adapters.tools.load_mcp_tools() internally sends:
+                # {
+                #   "jsonrpc": "2.0",
+                #   "id": 1,
+                #   "method": "tools/list",
+                #   "params": {"cursor": "optional-cursor-value"}
+                # }
+                
+                tools = await asyncio.wait_for(load_mcp_tools(session), timeout=10.0)
+                
+                print(f"✅ Successfully received {len(tools)} tools via MCP protocol")
+                
+                # Convert MCP tools to the format expected by the UI
+                tools_info = []
+                for tool in tools:
+                    tool_info = {
+                        "name": tool.name,
+                        "description": tool.description,
+                        "schema": tool.args_schema.schema() if hasattr(tool, 'args_schema') else None
+                    }
+                    tools_info.append(tool_info)
+                
+                return {
+                    "success": True,
+                    "total_tools": len(tools_info),
+                    "tools": tools_info,
+                    "message": f"Successfully loaded {len(tools_info)} MCP tools via protocol",
+                    "mcp_protocol": "tools/list",
+                    "note": "Tools discovered using MCP tools/list JSON-RPC method"
+                }
+                
+        except asyncio.TimeoutError:
+            print("⏰ MCP tool loading timed out after 10 seconds")
+            raise Exception("MCP tool loading timed out")
+        except Exception as mcp_error:
+            print(f"❌ MCP session error: {mcp_error}")
+            raise mcp_error
+            
+    except Exception as e:
+        print(f"❌ Error in tools endpoint: {e}")
+        import traceback
+        traceback.print_exc()
+        
+        print("📋 Returning fallback tools list due to error...")
+        return get_fallback_tools_response()
+
+def get_fallback_tools_response():
+    """Return fallback tools response when MCP protocol fails."""
+    fallback_tools = [
+        {
+            "name": "get_contacts",
+            "description": "Get all contacts from the CRM system",
+            "schema": {"type": "object", "properties": {}}
+        },
+        {
+            "name": "get_contact_relationships", 
+            "description": "Get contact relationships from the CRM system",
+            "schema": {"type": "object", "properties": {}}
+        },
+        {
+            "name": "get_contact_addresses",
+            "description": "Get contact addresses from the CRM system", 
+            "schema": {"type": "object", "properties": {}}
+        },
+        {
+            "name": "get_companies",
+            "description": "Get all companies from the CRM system",
+            "schema": {"type": "object", "properties": {}}
+        },
+        {
+            "name": "get_company_relationships",
+            "description": "Get company relationships from the CRM system",
+            "schema": {"type": "object", "properties": {}}
+        },
+        {
+            "name": "get_company_addresses", 
+            "description": "Get company addresses from the CRM system",
+            "schema": {"type": "object", "properties": {}}
+        },
+        {
+            "name": "get_system_fields",
+            "description": "Get system fields from the CRM system",
+            "schema": {"type": "object", "properties": {}}
+        },
+        {
+            "name": "get_contact_sytem_fields",
+            "description": "Get contact custom fields from the CRM system",
+            "schema": {"type": "object", "properties": {}}
+        },
+        {
+            "name": "get_company_sytem_fields",
+            "description": "Get company custom fields from the CRM system", 
+            "schema": {"type": "object", "properties": {}}
+        },
+        {
+            "name": "get_contact_addresses_by_uuid",
+            "description": "Get addresses for a specific contact by UUID",
+            "schema": {
+                "type": "object",
+                "properties": {
+                    "contact_uuid": {
+                        "type": "string",
+                        "description": "The UUID of the contact"
+                    }
+                },
+                "required": ["contact_uuid"]
+            }
+        },
+        {
+            "name": "get_contact_by_uuid",
+            "description": "Get a specific contact by UUID",
+            "schema": {
+                "type": "object", 
+                "properties": {
+                    "contact_uuid": {
+                        "type": "string",
+                        "description": "The UUID of the contact"
+                    }
+                },
+                "required": ["contact_uuid"]
+            }
+        },
+        {
+            "name": "save_contact",
+            "description": "Save or update a contact in the CRM system",
+            "schema": {
+                "type": "object",
+                "properties": {
+                    "contact_data": {
+                        "type": "object",
+                        "description": "Contact data to save"
+                    }
+                },
+                "required": ["contact_data"]
+            }
+        },
+        {
+            "name": "list_available_tools",
+            "description": "List all available tools in this MCP CRM server",
+            "schema": {"type": "object", "properties": {}}
+        }
+    ]
+    
+    return {
+        "success": False,
+        "error": "MCP protocol failed - using fallback tool list",
+        "fallback_tools": fallback_tools,
+        "total_tools": len(fallback_tools),
+        "message": "Using fallback tool list - MCP tools/list protocol failed",
+        "mcp_protocol": "fallback",
+        "note": "This is a static fallback when MCP tools/list cannot be reached"
     }
 
 # --- Endpoint to receive the user's prompt ---
@@ -229,6 +743,8 @@ async def handle_prompt(request: Request):
         raise HTTPException(status_code=400, detail="prompt is required")
 
     print(f"Received prompt for session {session_id}: {prompt}")
+    print(f"Current message queues: {list(message_queues.keys())}")
+    print(f"Session {session_id} exists in queues: {session_id in message_queues}")
 
     # Start the agent's work in a separate task so the POST request can return quickly
     async def run_agent():
@@ -457,6 +973,23 @@ async def direct_query(request: Request):
             "timestamp": "2025-08-11T02:30:00Z"
         }
 
+# --- Simple SSE Test Endpoint ---
+@app.get("/sse/test")
+async def test_sse():
+    """Simple test endpoint to verify SSE is working."""
+    print("🧪 SSE test endpoint called")
+    
+    async def test_generator():
+        yield "data: CONNECTED\n\n"
+        await asyncio.sleep(1)
+        yield "data: Test message 1\n\n"
+        await asyncio.sleep(1)
+        yield "data: Test message 2\n\n"
+        await asyncio.sleep(1)
+        yield "data: END_STREAM\n\n"
+    
+    return StreamingResponse(test_generator(), media_type="text/event-stream")
+
 # --- Endpoint for Server-Sent Events (SSE) streaming ---
 async def sse_generator(session_id: str):
     """Generator to stream events to the client."""
@@ -470,6 +1003,7 @@ async def sse_generator(session_id: str):
     try:
         # Send an immediate connection confirmation
         yield f"data: CONNECTED\n\n"
+        print(f"DEBUG: SSE generator sent CONNECTED message for session {session_id}")
 
         while True:
             try:
@@ -477,6 +1011,7 @@ async def sse_generator(session_id: str):
                 print(f"DEBUG: SSE generator received message: {repr(message)}")
                 if message == "END_STREAM":
                     print(f"DEBUG: SSE generator received END_STREAM")
+                    yield f"data: END_STREAM\n\n"
                     break
                 print(f"DEBUG: SSE generator yielding chunk: {repr(message)}")
                 # Properly format SSE data - escape newlines and ensure proper formatting

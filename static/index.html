@@ -68,14 +68,21 @@
             <div class="bg-gradient-to-r from-blue-600 to-purple-600 text-white p-6">
                 <h1 class="text-3xl font-bold text-center">Insites AI Assistant</h1>
                 <p class="text-center mt-2 opacity-90">Ask me to perform CRM tasks!!</p>
+                <div class="text-center mt-4 flex justify-center space-x-3">
+                    <button 
+                        id="tools-button" 
+                        class="bg-white text-blue-600 px-4 py-2 rounded-lg hover:bg-gray-100 focus:outline-none focus:ring-2 focus:ring-white focus:ring-offset-2 focus:ring-offset-blue-600 transition-colors"
+                    >
+                        🛠️ Available Tools
+                    </button>
+                </div>
             </div>
-
             <!-- Chat Container -->
             <div class="h-96 overflow-y-auto p-4 bg-gray-50" id="chat-container">
                 <div id="messages">
                     <div class="message-container agent">
                         <div class="message-bubble agent">
-                            <strong>Assistant:</strong> Hello! I'm powered by MCP tools. I can help you with:
+                            <strong>Assistant:</strong> Hello! I'm your Insites AI Assistant. How can I help you today?
                         </div>
                     </div>
                 </div>
@@ -102,6 +109,102 @@
                     <span id="connection-status">Connecting to server...</span>
                 </div>
             </div>
+
+            <!-- Tools Modal -->
+            <div id="tools-modal" class="fixed inset-0 bg-gray-600 bg-opacity-50 hidden z-50 p-2 sm:p-4">
+                <div class="flex items-center justify-center min-h-screen w-full">
+                    <div class="bg-white rounded-lg shadow-xl w-full max-w-xs sm:max-w-sm md:max-w-2xl lg:max-w-4xl xl:max-w-6xl max-h-[95vh] sm:max-h-[90vh] overflow-hidden mx-2">
+                        <!-- Header -->
+                        <div class="bg-gradient-to-r from-blue-600 to-purple-600 text-white p-3 sm:p-4 md:p-6">
+                            <div class="flex items-center justify-between">
+                                <h2 class="text-base sm:text-lg md:text-xl font-bold truncate pr-2">Available MCP Tools</h2>
+                                <button id="close-tools-modal" class="text-white hover:text-gray-200 text-xl sm:text-2xl font-bold p-1 hover:bg-white hover:bg-opacity-20 rounded transition-colors flex-shrink-0">
+                                    &times;
+                                </button>
+                            </div>
+                        </div>
+                        
+                        <!-- Content -->
+                        <div class="p-3 sm:p-4 md:p-6 overflow-y-auto" style="max-height: calc(95vh - 80px);">
+                            <!-- Loading State -->
+                            <div id="tools-loading" class="text-center py-6 sm:py-8">
+                                <div class="typing-indicator mx-auto mb-4"></div>
+                                <p class="text-gray-600 text-sm sm:text-base">Loading available tools...</p>
+                            </div>
+                            
+                            <!-- Content -->
+                            <div id="tools-content" class="hidden">
+                                <!-- Search Bar -->
+                                <div class="mb-3 sm:mb-4">
+                                    <div class="relative">
+                                        <input 
+                                            type="text" 
+                                            id="tools-search" 
+                                            placeholder="Search tools..."
+                                            class="w-full px-3 sm:px-4 py-2 sm:py-3 pl-8 sm:pl-10 pr-10 sm:pr-12 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                                        >
+                                        <div class="absolute inset-y-0 left-0 pl-2 sm:pl-3 flex items-center pointer-events-none">
+                                            <svg class="h-4 w-4 sm:h-5 sm:w-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path>
+                                            </svg>
+                                        </div>
+                                        <button 
+                                            id="clear-search" 
+                                            class="absolute inset-y-0 right-0 pr-2 sm:pr-3 flex items-center hidden hover:bg-gray-100 rounded-r-lg transition-colors"
+                                            title="Clear search"
+                                        >
+                                            <svg class="h-4 w-4 sm:h-5 sm:w-5 text-gray-400 hover:text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
+                                            </svg>
+                                        </button>
+                                    </div>
+                                </div>
+                                
+                                <!-- Tools List -->
+                                <div id="tools-list" class="space-y-2 sm:space-y-3 md:space-y-4"></div>
+                                
+                                <!-- Pagination Controls -->
+                                <div id="pagination-controls" class="mt-4 sm:mt-6 flex flex-col sm:flex-row items-center justify-between border-t pt-3 sm:pt-4 space-y-2 sm:space-y-0">
+                                    <div class="text-xs sm:text-sm text-gray-700 text-center sm:text-left">
+                                        Showing <span id="current-range"></span> of <span id="total-tools"></span> tools
+                                    </div>
+                                    <div class="flex items-center space-x-1 sm:space-x-2">
+                                        <button id="prev-page" class="px-2 sm:px-3 py-1.5 sm:py-2 text-xs sm:text-sm font-medium text-gray-500 bg-white border border-gray-300 rounded-md hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors">
+                                            ← Prev
+                                        </button>
+                                        <div class="flex items-center space-x-1">
+                                            <span id="current-page" class="px-2 sm:px-3 py-1.5 sm:py-2 text-xs sm:text-sm font-medium text-blue-600 bg-blue-50 border border-blue-300 rounded-md">1</span>
+                                            <span class="text-gray-500 text-xs sm:text-sm">of</span>
+                                            <span id="total-pages" class="px-2 sm:px-3 py-1.5 sm:py-2 text-xs sm:text-sm font-medium text-gray-700 bg-gray-50 border border-gray-300 rounded-md">1</span>
+                                        </div>
+                                        <button id="next-page" class="px-2 sm:px-3 py-1.5 sm:py-2 text-xs sm:text-sm font-medium text-gray-500 bg-white border border-gray-300 rounded-md hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors">
+                                            Next →
+                                        </button>
+                                    </div>
+                                </div>
+                                
+                                <!-- Mobile Close Button -->
+                                <div class="mt-4 sm:mt-6 md:hidden">
+                                    <button 
+                                        id="mobile-close-tools" 
+                                        class="w-full py-2.5 sm:py-3 px-4 bg-gray-100 text-gray-700 rounded-lg border border-gray-300 hover:bg-gray-200 transition-colors font-medium text-sm sm:text-base"
+                                    >
+                                        Close Tools
+                                    </button>
+                                </div>
+                            </div>
+                            
+                            <!-- Error State -->
+                            <div id="tools-error" class="hidden text-center py-6 sm:py-8">
+                                <p class="text-red-600 mb-4 text-sm sm:text-base">Failed to load tools</p>
+                                <button id="retry-tools" class="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700 transition-colors text-sm sm:text-base">
+                                    Retry
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
         </div>
     </div>
 
@@ -125,6 +228,137 @@
         const INSTANCE_URL = "https://iia-eric-v2.staging.oregon.platform-os.com";
         const INSTANCE_API_KEY = "instance_6153cf7d-0f2c-47cf-a71a-69e308ff08b3_PEpn2gnKf1BVeVHmeJfIufnsiam72sl_s5LsfoxmnFQ";
 
+        // // Tools modal elements
+        // const toolsModal = document.getElementById('tools-modal');
+        // const toolsButton = document.getElementById('tools-button');
+        // const closeToolsModal = document.getElementById('close-tools-modal');
+        // const toolsLoading = document.getElementById('tools-loading');
+        // const toolsContent = document.getElementById('tools-content');
+        // const toolsList = document.getElementById('tools-list');
+        // const toolsError = document.getElementById('tools-error');
+        // const retryTools = document.getElementById('retry-tools');
+
+        // // Pagination elements
+        // const currentRange = document.getElementById('current-range');
+        // const totalTools = document.getElementById('total-tools');
+        // const currentPage = document.getElementById('current-page');
+        // const totalPages = document.getElementById('total-pages');
+        // const prevPageButton = document.getElementById('prev-page');
+        // const nextPageButton = document.getElementById('next-page');
+
+        // // Search element
+        // const toolsSearch = document.getElementById('tools-search');
+        // const clearSearchButton = document.getElementById('clear-search');
+
+        // Pagination state
+        let allTools = [];
+        let filteredTools = [];
+        let currentPageIndex = 1;
+        const toolsPerPage = 5;
+        let requiredElements = {}
+        function initializeApp() {
+            console.log('🚀 Initializing application...');
+            console.log('🚀 Document ready state:', document.readyState);
+            console.log('🚀 Document body:', document.body);
+            
+            // Check if all required elements exist
+            requiredElements = {
+                sendButton: document.getElementById('send-button'),
+                input: document.getElementById('prompt-input'),
+                toolsButton: document.getElementById('tools-button'),
+                toolsModal: document.getElementById('tools-modal'),
+                toolsLoading: document.getElementById('tools-loading'),
+                toolsContent: document.getElementById('tools-content'),
+                toolsError: document.getElementById('tools-error'),
+                toolsList: document.getElementById('tools-list'),
+                closeToolsModal: document.getElementById('close-tools-modal'),
+                retryTools: document.getElementById('retry-tools'),
+                prevPageButton: document.getElementById('prev-page'),
+                nextPageButton: document.getElementById('next-page'),
+                toolsSearch: document.getElementById('tools-search'),
+                clearSearchButton: document.getElementById('clear-search'),
+                mobileCloseTools: document.getElementById('mobile-close-tools'),
+                currentRange: document.getElementById('current-range'),
+                totalTools: document.getElementById('total-tools'),
+                currentPage: document.getElementById('current-page'),
+                totalPages: document.getElementById('total-pages')
+            };
+            
+            // Log what we found
+            console.log('🔍 Element search results:');
+            for (const [name, element] of Object.entries(requiredElements)) {
+                console.log(`  ${name}: ${element ? '✅ Found' : '❌ Missing'}`);
+            }
+            
+            // Verify all elements exist
+            for (const [name, element] of Object.entries(requiredElements)) {
+                if (!element) {
+                    console.error(`❌ Required element not found: ${name}`);
+                    console.error(`❌ Cannot initialize application without all elements`);
+                    return;
+                }
+            }
+            
+            console.log('✅ All required elements found, setting up event listeners...');
+            
+            // Tools modal event listeners
+            requiredElements.toolsButton.addEventListener('click', () => showToolsModal(requiredElements));
+            requiredElements.closeToolsModal.addEventListener('click', () => hideToolsModal(requiredElements));
+            requiredElements.retryTools.addEventListener('click', () => loadTools(requiredElements));
+            
+
+            
+            // Mobile close button
+            requiredElements.mobileCloseTools.addEventListener('click', hideToolsModal);
+            
+            // Pagination event listeners
+            requiredElements.prevPageButton.addEventListener('click', goToPrevPage);
+            requiredElements.nextPageButton.addEventListener('click', goToNextPage);
+            
+            // Search event listener
+            requiredElements.toolsSearch.addEventListener('input', (event) => {
+                filterTools(event.target.value);
+            });
+            
+            // Clear search button listener
+            requiredElements.clearSearchButton.addEventListener('click', () => {
+                requiredElements.toolsSearch.value = '';
+                filterTools('');
+                requiredElements.clearSearchButton.classList.add('hidden');
+            });
+            
+            // Close modal when clicking outside
+            requiredElements.toolsModal.addEventListener('click', (event) => {
+                if (event.target === requiredElements.toolsModal) {
+                    hideToolsModal();
+                }
+            });
+            
+            // Close modal with Escape key
+            document.addEventListener('keydown', (event) => {
+                if (event.key === 'Escape' && !requiredElements.toolsModal.classList.contains('hidden')) {
+                    hideToolsModal();
+                }
+            });
+            
+            console.log('✅ Event listeners set up successfully');
+            
+            // Add a simple test to verify everything is working
+            console.log('🎉 Application initialization complete!');
+            console.log('🎉 You should now be able to:');
+            console.log('  - Click the test buttons');
+            console.log('  - Open the tools modal');
+            console.log('  - Send chat messages');
+        }
+
+        // Try to initialize immediately if DOM is already loaded
+        if (document.readyState === 'loading') {
+            // DOM is still loading, wait for DOMContentLoaded
+            document.addEventListener('DOMContentLoaded', initializeApp);
+        } else {
+            // DOM is already loaded, initialize immediately
+            initializeApp();
+        }
         function addMessage(sender, text, isTyping = false) {
             const messageContainer = document.createElement('div');
             messageContainer.className = `message-container ${sender}`;
@@ -156,6 +390,7 @@
 
         function closeEventSource() {
             if (eventSource) {
+
                 eventSource.close();
                 eventSource = null;
                 isStreaming = false;
@@ -165,9 +400,13 @@
         async function startStreaming() {
             closeEventSource();
             
-            // Always generate a new session ID for each connection
-            sessionId = 'session-' + Math.random().toString(36).substr(2, 9);
-            console.log('Generated session ID:', sessionId);
+            // Generate a new session ID only if we don't have one
+            if (!sessionId) {
+                sessionId = 'session-' + Math.random().toString(36).substr(2, 9);
+                console.log('Generated new session ID:', sessionId);
+            } else {
+                console.log('Reusing existing session ID:', sessionId);
+            }
             
             try {
                 updateConnectionStatus("Connecting to server...", false);
@@ -187,10 +426,15 @@
                     }
                     
                     if (event.data === "END_STREAM") {
+
                         // Don't close the connection, just mark as ready for next message
                         isStreaming = false;
                         updateConnectionStatus("Ready for new requests", false);
                         reconnectAttempts = 0; // Reset reconnect attempts on successful message
+                        
+                        // Reset for next response
+                        currentResponse = '';
+                        currentMessageContainer = null;
                         return;
                     }
                     
@@ -202,8 +446,11 @@
                     
                     // Handle response chunks
                     if (event.data !== "CONNECTED" && event.data !== "END_STREAM") {
+                        console.log('Received chunk:', event.data);
+                        console.log('Chunk length:', event.data.length);
                         currentResponse += event.data;
-                 
+                        console.log('Current response length:', currentResponse.length);
+                        console.log('Full response so far:', currentResponse);
                         
                         // Create or update the message container
                         if (!currentMessageContainer) {
@@ -215,12 +462,6 @@
                             const formattedResponse = currentResponse.replace(/\n/g, '<br>');
                             messageBubble.innerHTML = `<strong>Assistant:</strong> ${formattedResponse}`;
                         }
-                    }
-                    
-                    // Reset for next response
-                    if (event.data === "END_STREAM") {
-                        currentResponse = '';
-                        currentMessageContainer = null;
                     }
                 };
                 
@@ -257,6 +498,14 @@
         async function sendMessage() {
             const prompt = input.value.trim();
             if (!prompt || !isConnected) return;
+
+            // Reset for new message
+            currentResponse = '';
+            currentMessageContainer = null;
+
+            console.log('Sending message with session ID:', sessionId);
+            console.log('Is connected:', isConnected);
+            console.log('Is streaming:', isStreaming);
 
             // Add user message
             addMessage('user', prompt);
@@ -307,6 +556,309 @@
 
         // Initialize connection
         startStreaming();
+         // Mobile-friendly improvements
+        function addMobileEnhancements() {
+            // Add touch-friendly button sizes
+            const buttons = document.querySelectorAll('#tools-modal button');
+            buttons.forEach(button => {
+                button.classList.add('touch-manipulation');
+            });
+
+            // Add swipe to close functionality for mobile
+            let startX = 0;
+            let startY = 0;
+            let isDragging = false;
+
+            requiredElements.toolsModal.addEventListener('touchstart', (e) => {
+                startX = e.touches[0].clientX;
+                startY = e.touches[0].clientY;
+                isDragging = false;
+            });
+
+            requiredElements.toolsModal.addEventListener('touchmove', (e) => {
+                if (!isDragging) {
+                    const deltaX = Math.abs(e.touches[0].clientX - startX);
+                    const deltaY = Math.abs(e.touches[0].clientY - startY);
+                    
+                    if (deltaX > 10 || deltaY > 10) {
+                        isDragging = true;
+                    }
+                }
+            });
+
+            requiredElements.toolsModal.addEventListener('touchend', (e) => {
+                if (isDragging) {
+                    const deltaX = e.changedTouches[0].clientX - startX;
+                    const deltaY = e.changedTouches[0].clientY - startY;
+                    
+                    // Swipe down to close
+                    if (deltaY > 50 && Math.abs(deltaX) < 50) {
+                        hideToolsModal();
+                    }
+                }
+            });
+        }
+
+        // Tools modal functions
+        function showToolsModal() {
+            const toolsModal = document.getElementById('tools-modal');
+            if (requiredElements.toolsModal) {
+                requiredElements.toolsModal.classList.remove('hidden');
+                loadTools();
+                addMobileEnhancements();
+            }
+        }
+
+        function hideToolsModal() {
+            requiredElements.toolsModal.classList.add('hidden');
+            // Reset pagination state
+            currentPageIndex = 1;
+            allTools = [];
+            filteredTools = []; // Clear filtered tools on modal close
+            requiredElements.clearSearchButton.classList.add('hidden');
+            requiredElements.toolsSearch.value = ''; // Clear search input
+        }
+
+        async function loadTools() {
+            try {
+                console.log('🔍 Starting loadTools function...');
+                
+                // Show loading state
+                requiredElements.toolsLoading.classList.remove('hidden');
+                requiredElements.toolsContent.classList.add('hidden');
+                requiredElements.toolsError.classList.add('hidden');
+                
+                // Try simple endpoint first (always works)
+                try {
+                    console.log('🔍 Trying simple tools endpoint first...');
+                    const simpleResponse = await fetch('/tools/simple');
+                    
+                    if (simpleResponse.ok) {
+                        const simpleData = await simpleResponse.json();
+                        console.log('📡 Simple endpoint response received:', simpleData);
+                        
+                        if (simpleData.tools) {
+                            console.log('✅ Simple endpoint successful, using simple data');
+                            allTools = simpleData.tools;
+                            filteredTools = [...allTools];
+                            currentPageIndex = 1;
+                            console.log(`✅ Loaded ${allTools.length} tools from simple endpoint`);
+                            displayToolsPage();
+                            return;
+                        }
+                    }
+                } catch (simpleError) {
+                    console.log('⚠️ Simple endpoint failed, trying MCP:', simpleError.message);
+                }
+                
+                // // Try MCP endpoint second
+                // try {
+                //     console.log('🔍 Trying MCP endpoint...');
+                //     const mcpResponse = await fetch('/mcp/tools/list');
+                    
+                //     if (mcpResponse.ok) {
+                //         const mcpData = await mcpResponse.json();
+                //         console.log('📡 MCP response received:', mcpData);
+                        
+                //         if (mcpData.result && mcpData.result.tools) {
+                //             console.log('✅ MCP endpoint successful, using MCP data');
+                //             allTools = mcpData.result.tools;
+                //             filteredTools = [...allTools];
+                //             currentPageIndex = 1;
+                //             console.log(`✅ Loaded ${allTools.length} tools from MCP endpoint`);
+                //             displayToolsPage();
+                //             return;
+                //         }
+                //     }
+                // } catch (mcpError) {
+                //     console.log('⚠️ MCP endpoint failed, trying fallback:', mcpError.message);
+                // }
+                
+                // // Final fallback to /tools endpoint
+                // console.log('🔍 Trying final fallback to /tools endpoint...');
+                // const response = await fetch('/tools');
+                
+                // if (!response.ok) {
+                //     throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                // }
+                
+                // const data = await simpleData.json();
+                // console.log('📡 Final fallback response received:', data);
+                
+                // if (data.tools) {
+                //     console.log('✅ Using final fallback endpoint data');
+                //     allTools = data.tools;
+                //     filteredTools = [...allTools];
+                //     currentPageIndex = 1;
+                //     console.log(`✅ Loaded ${allTools.length} tools from final fallback endpoint`);
+                //     displayToolsPage();
+                // } else {
+                //     throw new Error('No tools found in any endpoint');
+                // }
+                
+            } catch (error) {
+                console.error('❌ Error loading tools:', error);
+                console.error('❌ Error details:', {
+                    name: error.name,
+                    message: error.message,
+                    stack: error.stack
+                });
+                showToolsError();
+            }
+        }
+
+        function displayToolsPage() {
+            console.log('🔍 Starting displayToolsPage function...');
+            console.log('🔍 allTools length:', allTools.length);
+            console.log('🔍 filteredTools length:', filteredTools.length);
+            console.log('🔍 currentPageIndex:', currentPageIndex);
+            
+            requiredElements.toolsLoading.classList.add('hidden');
+            requiredElements.toolsContent.classList.remove('hidden');
+            requiredElements.toolsError.classList.add('hidden');
+            
+            console.log('🔍 UI state updated, calculating pagination...');
+
+            const startIndex = (currentPageIndex - 1) * toolsPerPage;
+            const endIndex = Math.min(startIndex + toolsPerPage, filteredTools.length);
+            const currentTools = filteredTools.slice(startIndex, endIndex);
+            
+            console.log('🔍 Pagination calculated:', { startIndex, endIndex, currentToolsLength: currentTools.length });
+
+            // Update pagination info
+            requiredElements.currentRange.textContent = filteredTools.length > 0 ? `${startIndex + 1}-${endIndex}` : '0-0';
+            requiredElements.totalTools.textContent = filteredTools.length;
+            requiredElements.currentPage.textContent = currentPageIndex;
+            requiredElements.totalPages.textContent = Math.ceil(filteredTools.length / toolsPerPage);
+            
+            console.log('🔍 Pagination info updated');
+
+            // Update pagination buttons
+            requiredElements.prevPageButton.disabled = currentPageIndex === 1;
+            requiredElements.nextPageButton.disabled = currentPageIndex >= Math.ceil(filteredTools.length / toolsPerPage);
+            
+            console.log('🔍 Pagination buttons updated');
+
+            // Clear and populate tools list
+            requiredElements.toolsList.innerHTML = '';
+            console.log('🔍 Tools list cleared, starting to populate...');
+
+            if (filteredTools.length === 0) {
+                console.log('🔍 No tools to display, showing empty state');
+                requiredElements.toolsList.innerHTML = `
+                    <div class="text-center py-8">
+                        <div class="text-gray-500">
+                            <svg class="mx-auto h-12 w-12 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.172 16.172a4 4 0 015.656 0M9 12h6m-6-4h6m2 5.291A7.962 7.962 0 0112 15c-2.34 0-4.47-.881-6.08-2.33"></path>
+                            </svg>
+                            <p class="mt-2 text-sm font-medium text-gray-900">No tools found</p>
+                            <p class="mt-1 text-sm text-gray-500">Try adjusting your search terms.</p>
+                        </div>
+                    </div>
+                `;
+                return;
+            }
+
+            console.log('🔍 Starting to render tools...');
+            currentTools.forEach((tool, index) => {
+                console.log(`🔍 Rendering tool ${index + 1}:`, tool.name);
+                
+                const toolCard = document.createElement('div');
+                toolCard.className = 'bg-gray-50 rounded-lg p-2.5 sm:p-3 md:p-4 border border-gray-200 hover:shadow-md transition-all duration-200';
+                
+                let parametersHtml = '';
+                if (tool.schema && tool.schema.properties && Object.keys(tool.schema.properties).length > 0) {
+                    const params = Object.entries(tool.schema.properties);
+                    parametersHtml = `
+                        <div class="mt-2 sm:mt-3 p-2 sm:p-3 bg-white rounded border border-gray-200">
+                            <span class="font-medium text-gray-700 text-xs sm:text-sm">Parameters:</span>
+                            <div class="mt-1.5 sm:mt-2 space-y-1.5 sm:space-y-2">
+                                ${params.map(([name, info]) => `
+                                    <div class="flex flex-col sm:flex-row sm:items-start space-y-1 sm:space-y-0 sm:space-x-2">
+                                        <code class="bg-blue-100 text-blue-800 px-1.5 sm:px-2 py-0.5 sm:py-1 rounded text-xs font-mono flex-shrink-0 w-fit">${name}</code>
+                                        <div class="flex-1 min-w-0">
+                                            <span class="text-xs text-gray-500 font-medium">${info.type || 'unknown'}</span>
+                                            ${info.description ? `<span class="text-xs text-gray-600 ml-1 sm:ml-2 break-words">${info.description}</span>` : ''}
+                                        </div>
+                                    </div>
+                                `).join('')}
+                            </div>
+                        </div>
+                    `;
+                } else {
+                    parametersHtml = `
+                        <div class="mt-2 sm:mt-3 p-2 sm:p-3 bg-white rounded border border-gray-200">
+                            <span class="text-xs sm:text-sm text-gray-500">No parameters required</span>
+                        </div>
+                    `;
+                }
+
+                // Add required parameters indicator if any
+                let requiredParamsHtml = '';
+                if (tool.schema && tool.schema.required && tool.schema.required.length > 0) {
+                    requiredParamsHtml = `
+                        <div class="mt-1.5 sm:mt-2">
+                            <span class="text-xs text-red-600 font-medium">Required: ${tool.schema.required.join(', ')}</span>
+                        </div>
+                    `;
+                }
+
+                toolCard.innerHTML = `
+                    <div class="space-y-2 sm:space-y-3">
+                        <div class="flex flex-col sm:flex-row sm:items-start sm:justify-between space-y-1.5 sm:space-y-0">
+                            <div class="flex-1 min-w-0">
+                                <h3 class="font-semibold text-sm sm:text-base md:text-lg text-gray-800 break-words leading-tight">${startIndex + index + 1}. ${tool.name}</h3>
+                                <p class="text-gray-600 mt-1 text-xs sm:text-sm leading-relaxed break-words">${tool.description}</p>
+                                ${requiredParamsHtml}
+                            </div>
+                            <div class="flex-shrink-0">
+                                <span class="inline-flex items-center px-2 py-0.5 sm:px-2.5 sm:py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-800">
+                                    MCP Tool
+                                </span>
+                            </div>
+                        </div>
+                        ${parametersHtml}
+                    </div>
+                `;
+
+                requiredElements.toolsList.appendChild(toolCard);
+            });
+        }
+
+        function filterTools(searchTerm) {
+            if (!searchTerm.trim()) {
+                filteredTools = [...allTools];
+                requiredElements.clearSearchButton.classList.add('hidden');
+            } else {
+                const term = searchTerm.toLowerCase();
+                filteredTools = allTools.filter(tool => 
+                    tool.name.toLowerCase().includes(term) ||
+                    tool.description.toLowerCase().includes(term)
+                );
+                clearSearchButton.classList.remove('hidden');
+            }
+            
+            // Reset to first page when filtering
+            currentPageIndex = 1;
+            displayToolsPage();
+        }
+
+        function goToPage(pageIndex) {
+            if (pageIndex >= 1 && pageIndex <= Math.ceil(filteredTools.length / toolsPerPage)) {
+                currentPageIndex = pageIndex;
+                displayToolsPage();
+            }
+        }
+
+        function goToNextPage() {
+            goToPage(currentPageIndex + 1);
+        }
+
+        function goToPrevPage() {
+            goToPage(currentPageIndex - 1);
+        }
+
+        
     </script>
 </body>
 </html>

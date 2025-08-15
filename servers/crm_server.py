@@ -121,6 +121,16 @@ def fetch_api_data(endpoint: str) -> Dict[str, Any]:
 # MCP Tools
 @mcp.tool()
 def get_contacts() -> Dict[str, Any]:
+    """
+    Get all contacts from the CRM system.
+    
+    Returns:
+        Dict[str, Any]: A dictionary containing:
+            - success (bool): Whether the operation was successful
+            - result (dict): The contacts data if successful
+            - error (str): Error message if unsuccessful
+            - status_code (int): HTTP status code from the API
+    """
     logger.info("Calling get_contacts tool...")
     result = fetch_api_data("/crm/api/v2/contacts")
     logger.info(f"get_contacts tool finished. Result: {result}")
@@ -128,6 +138,16 @@ def get_contacts() -> Dict[str, Any]:
 
 @mcp.tool()
 def get_contact_relationships() -> Dict[str, Any]:
+    """
+    Get contact relationships from the CRM system.
+    
+    Returns:
+        Dict[str, Any]: A dictionary containing:
+            - success (bool): Whether the operation was successful
+            - result (dict): The contact relationships data if successful
+            - error (str): Error message if unsuccessful
+            - status_code (int): HTTP status code from the API
+    """
     logger.info("Calling get_contact_relationships tool...")
     result = fetch_api_data("/crm/api/v2/contacts/relationships")
     logger.info(f"get_contact_relationships tool finished. Result: {result}")
@@ -135,6 +155,16 @@ def get_contact_relationships() -> Dict[str, Any]:
 
 @mcp.tool()
 def get_contact_addresses() -> Dict[str, Any]:
+    """
+    Get contact addresses from the CRM system.
+    
+    Returns:
+        Dict[str, Any]: A dictionary containing:
+            - success (bool): Whether the operation was successful
+            - result (dict): The contact addresses data if successful
+            - error (str): Error message if unsuccessful
+            - status_code (int): HTTP status code from the API
+    """
     logger.info("Calling get_contact_addresses tool...")
     result = fetch_api_data("/crm/api/v2/contacts/addresses")
     logger.info(f"get_contact_addresses tool finished. Result: {result}")
@@ -142,6 +172,16 @@ def get_contact_addresses() -> Dict[str, Any]:
 
 @mcp.tool()
 def get_companies() -> Dict[str, Any]:
+    """
+    Get all companies from the CRM system.
+    
+    Returns:
+        Dict[str, Any]: A dictionary containing:
+            - success (bool): Whether the operation was successful
+            - result (dict): The companies data if successful
+            - error (str): Error message if unsuccessful
+            - status_code (int): HTTP status code from the API
+    """
     logger.info("Calling get_companies tool...")
     result = fetch_api_data("/crm/api/v2/companies")
     logger.info(f"get_companies tool finished. Result: {result}")
@@ -618,6 +658,12 @@ def save_contact(contact_data: Dict[str, Any]) -> Dict[str, Any]:
             try:
                 contact_result = response.json()
                 logger.info(f"Contact {'created' if response.status_code == 201 else 'updated'} successfully with UUID: {contact_result.get('uuid', 'N/A')}")
+                
+                return {
+                    "success": True,
+                    "result": contact_result,
+                    "message": "Contact saved successfully" if response.status_code == 201 else "Contact updated successfully"
+                }
             except json.JSONDecodeError as e:
                 logger.error(f"Failed to parse JSON response when trying to save contact. Error: {str(e)}")
                 return {
@@ -756,6 +802,120 @@ def check_entity_exists(endpoint: str, uuid_value: str) -> bool:
         # If we can't verify, assume it's valid to avoid blocking the save operation
         # In production, you might want to log this and handle it differently
         return True
+
+# -------------------------
+# Tool Information
+# -------------------------
+
+@mcp.tool()
+def list_available_tools() -> Dict[str, Any]:
+    """
+    List all available tools in this MCP CRM server with their descriptions and parameters.
+    
+    Returns:
+        Dict[str, Any]: A dictionary containing:
+            - success (bool): Whether the operation was successful
+            - tools (list): List of available tools with their information
+            - total_tools (int): Total number of available tools
+    """
+    logger.info("Calling list_available_tools tool...")
+    
+    tools_info = [
+        {
+            "name": "Get Contacts",
+            "description": "Get all contacts from the CRM module",
+            "parameters": {},
+            "returns": "Contacts data or error information"
+        },
+        {
+            "name": "Get Contact Relationships",
+            "description": "Get contact relationships from the CRM module", 
+            "parameters": {},
+            "returns": "Contact relationships data or error information"
+        },
+        {
+            "name": "Get Contact Addresses",
+            "description": "Get contact addresses from the CRM module",
+            "parameters": {},
+            "returns": "Contact addresses data or error information"
+        },
+        {
+            "name": "Get Companies",
+            "description": "Get all companies from the CRM module",
+            "parameters": {},
+            "returns": "Companies data or error information"
+        },
+        {
+            "name": "Get Company Relationships",
+            "description": "Get company relationships from the CRM module",
+            "parameters": {},
+            "returns": "Company relationships data or error information"
+        },
+        {
+            "name": "Get Company Addresses",
+            "description": "Get company addresses from the CRM module",
+            "parameters": {},
+            "returns": "Company addresses data or error information"
+        },
+        {
+            "name": "Get System Fields",
+            "description": "Get system fields from the CRM module",
+            "parameters": {},
+            "returns": "System fields data or error information"
+        },
+        {
+            "name": "Get Contact System Fields",
+            "description": "Get contact custom fields from the CRM module",
+            "parameters": {},
+            "returns": "Contact custom fields data or error information"
+        },
+        {
+            "name": "Get Company System Fields",
+            "description": "Get company custom fields from the CRM module",
+            "parameters": {},
+            "returns": "Company custom fields data or error information"
+        },
+        # {
+        #     "name": "get_contact_addresses_by_uuid",
+        #     "description": "Get addresses for a specific contact by UUID",
+        #     "parameters": {
+        #         "contact_uuid": "string - The UUID of the contact"
+        #     },
+        #     "returns": "Contact addresses data or error information"
+        # },
+        # {
+        #     "name": "get_contact_by_uuid",
+        #     "description": "Get a specific contact by UUID",
+        #     "parameters": {
+        #         "contact_uuid": "string - The UUID of the contact"
+        #     },
+        #     "returns": "Contact data or error information"
+        # },
+        {
+            "name": "Save contact",
+            "description": "Save or update a contact in the CRM module",
+            "parameters": {
+                "contact_data": "object - Contact data to save"
+            },
+            "returns": "Save operation result or error information"
+        },
+        # {
+        #     "name": "list_available_tools",
+        #     "description": "List all available tools in this MCP CRM server",
+        #     "parameters": {},
+        #     "returns": "List of available tools with descriptions"
+        # }
+    ]
+    
+    result = {
+        "success": True,
+        "tools": tools_info,
+        "total_tools": len(tools_info),
+        "message": f"Successfully listed {len(tools_info)} available tools"
+    }
+    
+    logger.info(f"list_available_tools tool finished. Result: {result}")
+    return result
 
 # -------------------------
 # Entry Point

@@ -10,6 +10,64 @@ A FastAPI-based server that integrates with CRM systems using the Model Context 
 - 📡 **Real-time Streaming**: Server-Sent Events (SSE) for live response streaming
 - 🐳 **Docker Ready**: Containerized for easy deployment
 - ☁️ **Cloud Run Compatible**: Optimized for Google Cloud Platform deployment
+- 🛠️ **Tool Discovery**: Built-in endpoints to list and discover available MCP tools
+
+## Tool Discovery
+
+The MCP CRM Server provides multiple ways to discover and list available tools:
+
+### 1. API Endpoint for Tool Listing
+
+```bash
+# Get all available tools via REST API
+GET /tools
+
+# Response includes tool names, descriptions, and parameter schemas
+{
+  "success": true,
+  "total_tools": 13,
+  "tools": [
+    {
+      "name": "get_contacts",
+      "description": "Get all contacts from the CRM system",
+      "schema": {...}
+    },
+    ...
+  ]
+}
+```
+
+### 2. Built-in Tool for Discovery
+
+The CRM server includes a `list_available_tools` tool that can be called directly:
+
+```python
+# When using the MCP server directly
+result = await list_available_tools()
+# Returns detailed information about all available tools
+```
+
+### 3. Standalone Discovery Script
+
+Use the included `discover_tools.py` script to discover tools without starting the full server:
+
+```bash
+python discover_tools.py
+```
+
+This will output a formatted list of all available tools with their descriptions and parameters.
+
+### Available Tools
+
+The CRM server provides the following tools:
+
+- **Contact Management**: `get_contacts`, `get_contact_by_uuid`, `save_contact`
+- **Address Management**: `get_contact_addresses`, `get_contact_addresses_by_uuid`
+- **Company Management**: `get_companies`, `get_company_relationships`, `get_company_addresses`
+- **System Fields**: `get_system_fields`, `get_contact_sytem_fields`, `get_company_sytem_fields`
+- **Utility**: `list_available_tools`
+
+Each tool includes proper documentation, parameter validation, and error handling.
 
 ## Prerequisites
 
