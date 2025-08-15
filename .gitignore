@@ -147,6 +147,10 @@ local/
 dev/
 development/
 
+# Test files
+test_*.py
+*_test.py
+
 # Backup files
 *.bak
 *.backup
