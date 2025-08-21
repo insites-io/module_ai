@@ -60,3 +60,4 @@ echo "   Health check at: http://localhost:8080/"
 # Start the server
 exec python main_with_ui.py
 
+

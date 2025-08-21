@@ -1,9 +1,11 @@
-# Multi-stage build for MCP Server
+# Multi-stage build for optimized MCP CRM Server
 FROM python:3.11-slim AS builder
 
-# Install system dependencies
+# Install build dependencies
 RUN apt-get update && apt-get install -y \
     gcc \
+    g++ \
+    build-essential \
     && rm -rf /var/lib/apt/lists/*
 
 # Set working directory
@@ -11,48 +13,55 @@ WORKDIR /app
 
 # Copy requirements and install Python dependencies
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir --root-user-action=ignore -r requirements.txt
 
 # Production stage
 FROM python:3.11-slim AS production
 
-# Install runtime dependencies
+# Install minimal runtime dependencies
 RUN apt-get update && apt-get install -y \
     curl \
-    && rm -rf /var/lib/apt/lists/*
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/* \
+    && apt-get clean
 
 # Create non-root user
-RUN useradd --create-home --shell /bin/bash appuser
+RUN useradd --create-home --shell /bin/bash --uid 1000 appuser
 
 # Set working directory
 WORKDIR /app
 
-# Copy Python dependencies from builder
+# Copy Python dependencies from builder stage
 COPY --from=builder /usr/local/lib/python3.11/site-packages /usr/local/lib/python3.11/site-packages
 COPY --from=builder /usr/local/bin /usr/local/bin
 
-# Copy application code
-COPY --chown=appuser:appuser . .
+# Copy application code with proper ownership
+COPY --chown=appuser:appuser main.py .
+COPY --chown=appuser:appuser servers/ ./servers/
+COPY --chown=appuser:appuser requirements.txt .
 
-# Copy startup script explicitly (since it's in .gitignore)
-COPY --chown=appuser:appuser start.sh /app/start.sh
+# Create __init__.py files to ensure proper Python module structure
+RUN touch /app/__init__.py && \
+    touch /app/servers/__init__.py && \
+    chown appuser:appuser /app/__init__.py /app/servers/__init__.py
 
-# Note: vertex-credentials.json should be provided via environment variables or mounted as a volume
-# The application will use GOOGLE_APPLICATION_CREDENTIALS environment variable or default credentials
-
-# Make startup script executable
-RUN chmod +x /app/start.sh
+# Test import with dummy environment variables
+RUN GCP_PROJECT_ID=mcp-server-468305 GCP_REGION=australia-southeast1 python -c "import main; print('✅ Application import successful')"
 
 # Switch to non-root user
 USER appuser
 
-# Expose port
+# Set environment variables
+ENV PYTHONPATH=/app
+ENV PYTHONUNBUFFERED=1
+ENV PYTHONDONTWRITEBYTECODE=1
+
+# Expose port (Cloud Run will override with PORT env var)
 EXPOSE 8080
 
-# Health check - use the simple health endpoint
-HEALTHCHECK --interval=30s --timeout=30s --start-period=5s --retries=3 \
-    CMD curl -f http://localhost:${PORT:-8080}/health || exit 1
+# Remove healthcheck for Cloud Run (it has its own)
+# HEALTHCHECK removed - Cloud Run handles this
 
-# Run the application using the startup script
-CMD ["/app/start.sh"]
-
+# Use shell form with better error handling
+CMD sh -c "echo 'Starting MCP server on port ${PORT:-8080}...' && python -m uvicorn main:app --host 0.0.0.0 --port ${PORT:-8080} --workers 1 --access-log --log-level info"

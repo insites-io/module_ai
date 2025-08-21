@@ -523,97 +523,57 @@ async def simple_tools():
 
 # --- Tools Listing Endpoint ---
 @app.get("/tools")
-async def list_tools():
-    """List all available MCP tools with their descriptions and parameters.
-    
-    This endpoint implements the MCP tools/list functionality as a REST wrapper.
-    Internally, it uses the MCP protocol to discover tools from the CRM server.
-    """
-    print("🔍 Tools endpoint called - implementing MCP tools/list functionality...")
-    
+async def list_tools(request: Request):
+    """List all available MCP tools with their descriptions and parameters."""
     try:
-        print("🔧 Attempting to create MCP session for tool discovery...")
-        
-        # Check if required packages are available
-        try:
-            from mcp import ClientSession, StdioServerParameters
-            from mcp.client.stdio import stdio_client
-        except ImportError as import_error:
-            print(f"⚠️ MCP packages not available: {import_error}")
-            print("📋 Returning fallback tools list...")
-            return get_fallback_tools_response()
-        
-        # Get the path to the CRM server script
+        from mcp import ClientSession, StdioServerParameters
+        from mcp.client.stdio import stdio_client
+
+        # Path to your CRM MCP server
         crm_server_path = os.path.join(os.path.dirname(__file__), "servers", "crm_server.py")
-        
-        if not os.path.exists(crm_server_path):
-            print(f"⚠️ CRM server script not found at: {crm_server_path}")
-            print("📋 Returning fallback tools list...")
-            return get_fallback_tools_response()
-        
-        print(f"📁 CRM server script found at: {crm_server_path}")
-        
-        # Create server parameters with mock credentials
+
+        # Read instance credentials from query params (optional)
+        instance_url = request.query_params.get("instance_url")
+        instance_api_key = request.query_params.get("instance_api_key")
+        print(f"Instance URL: {instance_url}")
+        print(f"Instance API Key: {instance_api_key}")
+        # Spawn a new MCP server process via stdio
         server_params = StdioServerParameters(
             command="python",
-            args=[crm_server_path, "--instance-url", "mock", "--instance-api-key", "mock"]
+            args=[crm_server_path, "--instance-url", instance_url, "--instance-api-key", instance_api_key]
         )
-        
-        print("🔌 Attempting to establish MCP connection...")
-        
-        # Create a session to get tool information with timeout
-        try:
-            async with stdio_client(server_params) as (read, write):
-                session = ClientSession(read, write)
-                
-                print("📡 MCP connection established, sending tools/list request...")
-                
-                # This is equivalent to the MCP tools/list JSON-RPC request you found
-                # The langchain_mcp_adapters.tools.load_mcp_tools() internally sends:
-                # {
-                #   "jsonrpc": "2.0",
-                #   "id": 1,
-                #   "method": "tools/list",
-                #   "params": {"cursor": "optional-cursor-value"}
-                # }
-                
-                tools = await asyncio.wait_for(load_mcp_tools(session), timeout=10.0)
-                
-                print(f"✅ Successfully received {len(tools)} tools via MCP protocol")
-                
-                # Convert MCP tools to the format expected by the UI
-                tools_info = []
-                for tool in tools:
-                    tool_info = {
-                        "name": tool.name,
-                        "description": tool.description,
-                        "schema": tool.args_schema.schema() if hasattr(tool, 'args_schema') else None
-                    }
-                    tools_info.append(tool_info)
-                
-                return {
-                    "success": True,
-                    "total_tools": len(tools_info),
-                    "tools": tools_info,
-                    "message": f"Successfully loaded {len(tools_info)} MCP tools via protocol",
-                    "mcp_protocol": "tools/list",
-                    "note": "Tools discovered using MCP tools/list JSON-RPC method"
-                }
-                
-        except asyncio.TimeoutError:
-            print("⏰ MCP tool loading timed out after 10 seconds")
-            raise Exception("MCP tool loading timed out")
-        except Exception as mcp_error:
-            print(f"❌ MCP session error: {mcp_error}")
-            raise mcp_error
-            
+
+        tools_info = []
+        async with stdio_client(server_params) as (read, write):
+            session = ClientSession(read, write)
+
+            # Load tools from MCP server
+            tools = await load_mcp_tools(session)
+            for tool in tools:
+                tools_info.append({
+                    "name": tool.name,
+                    "description": tool.description,
+                    "schema": tool.args_schema.schema() if hasattr(tool, "args_schema") else None,
+                })
+
+        return {
+            "success": True,
+            "total_tools": len(tools_info),
+            "tools": tools_info,
+            "message": f"Successfully loaded {len(tools_info)} MCP tools",
+        }
+
     except Exception as e:
-        print(f"❌ Error in tools endpoint: {e}")
         import traceback
+        print(f"❌ Error listing tools: {e}")
         traceback.print_exc()
-        
-        print("📋 Returning fallback tools list due to error...")
-        return get_fallback_tools_response()
+
+        return {
+            "success": False,
+            "error": str(e),
+            "message": "Failed to dynamically load tools, check CRM server logs",
+        }
+
 
 def get_fallback_tools_response():
     """Return fallback tools response when MCP protocol fails."""
