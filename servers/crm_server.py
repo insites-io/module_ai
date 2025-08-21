@@ -927,7 +927,6 @@ if __name__ == "__main__":
     logger.info("About to call mcp.run(transport='stdio')")
     try:
         mcp.run(transport="stdio")
-        logger.info("mcp.run completed successfully")
     except Exception as e:
         logger.error(f"Error in mcp.run: {e}")
         import traceback

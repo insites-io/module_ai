@@ -1,7 +1,3 @@
-# --- File: main.py (The MCP Server/API) ---
-# This is a FastAPI server that acts as the MCP server.
-# It receives prompts, processes them using a LangChain agent, and streams the response.
-
 import asyncio
 import os
 import uuid
@@ -13,56 +9,81 @@ from fastapi.responses import StreamingResponse
 from contextlib import asynccontextmanager
 from langchain_core.messages import HumanMessage
 from langgraph.prebuilt import create_react_agent
-from langchain_mcp_adapters.tools import load_mcp_tools
-from langchain_google_vertexai import ChatVertexAI # Official LangChain integration for Vertex AI
-from mcp import ClientSession, StdioServerParameters
-from mcp.client.stdio import stdio_client
+from langchain_google_vertexai import ChatVertexAI
 from collections import defaultdict
-from typing import Dict, Any
+from typing import Dict, Any, Optional
+import httpx
+from pydantic import BaseModel
+
+# Import CRM tools directly
+from servers.crm_tools import CRMTools
 
 # --- Load environment variables from .env file ---
 load_dotenv()
 
-# --- Configuration ---
-# --- IMPORTANT: These environment variables MUST be set in your Cloud Run service or .env file ---
+# --- Configuration with graceful defaults for build-time ---
 GCP_PROJECT_ID = os.getenv("GCP_PROJECT_ID")
-GCP_REGION = os.getenv("GCP_REGION")
+GCP_REGION = os.getenv("GCP_REGION") 
 GEMINI_MODEL_NAME = os.getenv("GEMINI_MODEL_NAME", "gemini-1.5-pro")
 
-# Handle credentials - use local vertex-credentials.json file
+# Handle credentials
 CREDENTIALS_PATH = os.path.join(os.path.dirname(__file__), "vertex-credentials.json")
 if os.path.exists(CREDENTIALS_PATH):
     os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = CREDENTIALS_PATH
     print(f"Using local credentials from: {CREDENTIALS_PATH}")
 else:
-    # Fallback to environment variable if local file doesn't exist
     env_credentials = os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
     if env_credentials:
         os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = env_credentials
         print(f"Using credentials from environment: {env_credentials}")
     else:
-        # In Cloud Run, use the default service account credentials
         print("Using default service account credentials from Cloud Run")
 
-if not all([GCP_PROJECT_ID, GCP_REGION]):
-    raise ValueError("GCP_PROJECT_ID and GCP_REGION must be set.")
+# Only validate required vars if not in build mode (when they're actually needed)
+def validate_environment():
+    """Validate environment variables when actually needed."""
+    if not all([GCP_PROJECT_ID, GCP_REGION]):
+        raise ValueError("GCP_PROJECT_ID and GCP_REGION must be set.")
 
 # --- Asynchronous Message Queues for Streaming ---
-# This dictionary holds the message queues for each session_id
 message_queues: Dict[str, asyncio.Queue] = defaultdict(asyncio.Queue)
+
+# --- Pydantic Models ---
+class QueryRequest(BaseModel):
+    prompt: str
+    instance_url: str
+    instance_api_key: str
+
+class MessageRequest(BaseModel):
+    prompt: str
+    instance_url: str
+    instance_api_key: str
+
+class ToolsRequest(BaseModel):
+    instance_url: str
+    instance_api_key: str
 
 # --- FastAPI App ---
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup
     print("🚀 Starting MCP CRM Server...")
-    print(f"📋 Project ID: {GCP_PROJECT_ID}")
-    print(f"🌍 Region: {GCP_REGION}")
-    print(f"🤖 Model: {GEMINI_MODEL_NAME}")
+    
+    # Validate environment at startup (runtime)
+    try:
+        validate_environment()
+        print(f"📋 Project ID: {GCP_PROJECT_ID}")
+        print(f"🌍 Region: {GCP_REGION}")
+        print(f"🤖 Model: {GEMINI_MODEL_NAME}")
+    except ValueError as e:
+        print(f"❌ Environment validation failed: {e}")
+        app.state.llm = None
+        yield
+        return
     
     try:
-        print("🔧 Initializing LLM and MCP tools...")
-        # Initialize the LLM (Claude on Vertex AI)
+        print("🔧 Initializing LLM...")
+        # Initialize the LLM
         llm = ChatVertexAI(
             project=GCP_PROJECT_ID,
             location=GCP_REGION,
@@ -72,10 +93,7 @@ async def lifespan(app: FastAPI):
 
         # Store the LLM for later use
         app.state.llm = llm
-        
-        # Create a simple agent without tools initially
-        app.state.agent = create_react_agent(llm, [])
-        print("✅ LLM agent initialized successfully.")
+        print("✅ LLM initialized successfully.")
         
         # Test the LLM connection
         try:
@@ -83,53 +101,30 @@ async def lifespan(app: FastAPI):
             print("✅ LLM connection test successful")
         except Exception as test_error:
             print(f"⚠️ LLM connection test failed: {test_error}")
-            # Don't fail startup for this, but log it
             
     except Exception as e:
         print(f"❌ Error initializing LLM: {e}")
         import traceback
         traceback.print_exc()
-        # Log the error but don't fail startup completely
-        print(f"⚠️ Continuing with startup despite LLM initialization error")
         app.state.llm = None
-        app.state.agent = None
     
     yield
     
-    # Shutdown (if needed)
+    # Shutdown
     print("🛑 Shutting down MCP CRM Server...")
-    try:
-        # Clean up any remaining tasks
-        for task in asyncio.all_tasks():
-            if not task.done():
-                print(f"DEBUG: Cancelling task: {task}")
-                task.cancel()
-    except Exception as cleanup_error:
-        print(f"DEBUG: Error during cleanup: {cleanup_error}")
 
 app = FastAPI(
     title="MCP CRM API",
-    description="API for CRM operations using MCP protocol and LangChain",
+    description="API for CRM operations using direct tool imports",
     version="1.0.0",
     lifespan=lifespan
 )
 
-# Global exception handler for unhandled async errors
-@app.exception_handler(Exception)
-async def global_exception_handler(request: Request, exc: Exception):
-    print(f"DEBUG: Global exception handler caught: {exc}")
-    import traceback
-    traceback.print_exc()
-    return {
-        "success": False,
-        "error": "Internal server error",
-        "detail": str(exc),
-        "timestamp": "2025-08-11T02:30:00Z"
-    }
-
-# --- Initialize the LLM and Tools once per server start (for performance) ---
-# We use a global variable to store the initialized agent and tools
-# This is a common pattern in serverless containers for warm starts
+# --- Helper function to create CRM tools ---
+def create_crm_tools(instance_url: str, instance_api_key: str):
+    """Create CRM tools with the given instance credentials."""
+    crm_tools = CRMTools(instance_url, instance_api_key)
+    return crm_tools.get_langchain_tools()
 
 # --- Health Check Endpoint ---
 @app.get("/")
@@ -139,8 +134,12 @@ async def health_check():
         "status": "healthy",
         "service": "MCP CRM API",
         "version": "1.0.0",
-        "timestamp": "2025-08-11T02:30:00Z",
-        "message": "Server is running and ready"
+        "message": "Server is running and ready",
+        "config": {
+            "project_id": GCP_PROJECT_ID or "not set",
+            "region": GCP_REGION or "not set",
+            "model": GEMINI_MODEL_NAME
+        }
     }
 
 @app.get("/health")
@@ -156,27 +155,39 @@ async def api_docs():
         "endpoints": {
             "GET /": "Health check",
             "GET /docs": "This API documentation",
-            "GET /tools": "List all available MCP tools",
+            "POST /tools": "List all available CRM tools",
             "POST /messages": "Send a prompt to the CRM agent (with SSE streaming)",
             "POST /query": "Direct query endpoint (synchronous response)",
             "GET /sse": "Server-Sent Events stream for real-time responses"
         },
         "usage": {
             "POST /messages": {
-                "url": "/messages?session_id={session_id}&instance_url={instance_url}&instance_api_key={instance_api_key}",
-                "body": {"prompt": "Your CRM query here"},
+                "url": "/messages?session_id={session_id}",
+                "body": {
+                    "prompt": "Your CRM query here",
+                    "instance_url": "Your CRM instance URL",
+                    "instance_api_key": "Your CRM instance API key"
+                },
                 "example": "Get me all contacts",
                 "note": "Use with SSE endpoint for streaming responses"
             },
             "POST /query": {
-                "url": "/query?instance_url={instance_url}&instance_api_key={instance_api_key}",
-                "body": {"prompt": "Your CRM query here"},
+                "url": "/query",
+                "body": {
+                    "prompt": "Your CRM query here",
+                    "instance_url": "Your CRM instance URL",
+                    "instance_api_key": "Your CRM instance API key"
+                },
                 "example": "Get me all contacts",
                 "note": "Direct response, no streaming required"
             },
-            "GET /sse": {
-                "url": "/sse?session_id={session_id}&instance_url={instance_url}&instance_api_key={instance_api_key}",
-                "description": "Establish SSE connection for streaming responses"
+            "POST /tools": {
+                "url": "/tools",
+                "body": {
+                    "instance_url": "Your CRM instance URL",
+                    "instance_api_key": "Your CRM instance API key"
+                },
+                "note": "Returns list of available tools for the instance"
             }
         },
         "parameters": {
@@ -186,466 +197,218 @@ async def api_docs():
         }
     }
 
-# --- Tools Listing Endpoint ---
-@app.get("/tools")
-async def list_tools():
-    """List all available MCP tools with their descriptions and parameters."""
+# --- Tools Listing Endpoint (now accepts body with credentials) ---
+@app.post("/tools")
+async def list_tools(request: ToolsRequest):
+    """List all available CRM tools for the given instance."""
     try:
-        # Create a mock session to get tool information
-        # This is a simplified approach - in production you might want to cache this
-        from mcp import ClientSession, StdioServerParameters
-        from mcp.client.stdio import stdio_client
-        
-        # Get the path to the CRM server script
-        crm_server_path = os.path.join(os.path.dirname(__file__), "servers", "crm_server.py")
-        
-        # Create server parameters
-        server_params = StdioServerParameters(
-            command="python",
-            args=[crm_server_path, "--instance-url", "mock", "--instance-api-key", "mock"]
-        )
-        
-        # Create a session to get tool information
-        async with stdio_client(server_params) as (read, write):
-            session = ClientSession(read, write)
-            
-            # Get the tools list
-            tools = await load_mcp_tools(session)
-            
-            # Extract tool information
-            tools_info = []
-            for tool in tools:
-                tool_info = {
-                    "name": tool.name,
-                    "description": tool.description,
-                    "schema": tool.args_schema.schema() if hasattr(tool, 'args_schema') else None
-                }
-                tools_info.append(tool_info)
-            
-            return {
-                "success": True,
-                "total_tools": len(tools_info),
-                "tools": tools_info,
-                "message": f"Successfully loaded {len(tools_info)} MCP tools"
-            }
-            
-    except Exception as e:
-        print(f"Error listing tools: {e}")
-        import traceback
-        traceback.print_exc()
-        
-        # Return a fallback list based on the CRM server code
-        fallback_tools = [
-            {
-                "name": "get_contacts",
-                "description": "Get all contacts from the CRM system",
-                "schema": {"type": "object", "properties": {}}
-            },
-            {
-                "name": "get_contact_relationships", 
-                "description": "Get contact relationships from the CRM system",
-                "schema": {"type": "object", "properties": {}}
-            },
-            {
-                "name": "get_contact_addresses",
-                "description": "Get contact addresses from the CRM system", 
-                "schema": {"type": "object", "properties": {}}
-            },
-            {
-                "name": "get_companies",
-                "description": "Get all companies from the CRM system",
-                "schema": {"type": "object", "properties": {}}
-            },
-            {
-                "name": "get_company_relationships",
-                "description": "Get company relationships from the CRM system",
-                "schema": {"type": "object", "properties": {}}
-            },
-            {
-                "name": "get_company_addresses", 
-                "description": "Get company addresses from the CRM system",
-                "schema": {"type": "object", "properties": {}}
-            },
-            {
-                "name": "get_system_fields",
-                "description": "Get system fields from the CRM system",
-                "schema": {"type": "object", "properties": {}}
-            },
-            {
-                "name": "get_contact_sytem_fields",
-                "description": "Get contact custom fields from the CRM system",
-                "schema": {"type": "object", "properties": {}}
-            },
-            {
-                "name": "get_company_sytem_fields",
-                "description": "Get company custom fields from the CRM system", 
-                "schema": {"type": "object", "properties": {}}
-            },
-            {
-                "name": "get_contact_addresses_by_uuid",
-                "description": "Get addresses for a specific contact by UUID",
-                "schema": {
-                    "type": "object",
-                    "properties": {
-                        "contact_uuid": {
-                            "type": "string",
-                            "description": "The UUID of the contact"
-                        }
-                    },
-                    "required": ["contact_uuid"]
-                }
-            },
-            {
-                "name": "get_contact_by_uuid",
-                "description": "Get a specific contact by UUID",
-                "schema": {
-                    "type": "object", 
-                    "properties": {
-                        "contact_uuid": {
-                            "type": "string",
-                            "description": "The UUID of the contact"
-                        }
-                    },
-                    "required": ["contact_uuid"]
-                }
-            },
-            {
-                "name": "save_contact",
-                "description": "Save or update a contact in the CRM system",
-                "schema": {
-                    "type": "object",
-                    "properties": {
-                        "contact_data": {
-                            "type": "object",
-                            "description": "Contact data to save"
-                        }
-                    },
-                    "required": ["contact_data"]
-                }
-            }
-        ]
+        # Validate the instance credentials by trying to create tools
+        crm_tools = CRMTools(request.instance_url, request.instance_api_key)
         
         return {
-            "success": False,
-            "error": f"Failed to load tools dynamically: {str(e)}",
-            "fallback_tools": fallback_tools,
-            "total_tools": len(fallback_tools),
-            "message": "Using fallback tool list from CRM server code"
-        }
-
-# --- Endpoint to receive the user's prompt ---
-@app.post("/messages")
-async def handle_prompt(request: Request):
-    """Receives a prompt and pushes it to an agent for processing."""
-    body = await request.json()
-    session_id = request.query_params.get("session_id")
-    instance_url = request.query_params.get("instance_url")
-    instance_api_key = request.query_params.get("instance_api_key") 
-    
-    if not session_id:
-        raise HTTPException(status_code=400, detail="session_id is required")
-    if not instance_url:
-        raise HTTPException(status_code=400, detail="instance_url is required")
-    if not instance_api_key:
-        raise HTTPException(status_code=400, detail="instance_api_key is required")
-
-    prompt = body.get("prompt")
-    if not prompt:
-        raise HTTPException(status_code=400, detail="prompt is required")
-
-    print(f"Received prompt for session {session_id}: {prompt}")
-    print(f"Current message queues: {list(message_queues.keys())}")
-    print(f"Session {session_id} exists in queues: {session_id in message_queues}")
-
-    # Start the agent's work in a separate task so the POST request can return quickly
-    async def run_agent():
-        response_text = ""
-        try:
-            # Check if LLM is available
-            if not hasattr(app.state, 'llm') or app.state.llm is None:
-                response_text = "Error: LLM not initialized. Please check server logs."
-                return
-                
-            # Create server parameters with instance variables as command line arguments
-            # Use sys.executable to get the current Python interpreter path
-            import sys
-            import os
-            python_path = sys.executable
-            script_path = os.path.join(os.getcwd(), "servers", "crm_server.py")
-            
-            server_args = [python_path, script_path]
-            if instance_url:
-                server_args.extend(["--instance-url", instance_url])
-            if instance_api_key:
-                server_args.extend(["--instance-api-key", instance_api_key])
-            
-            print(f"DEBUG: Starting MCP server with args: {server_args}")
-            
-            # Debug: Check if the script exists and is executable
-            if os.path.exists(script_path):
-                print(f"DEBUG: Script exists at {script_path}")
-                if os.access(script_path, os.R_OK):
-                    print(f"DEBUG: Script is readable")
-                else:
-                    print(f"DEBUG: Script is NOT readable")
-                if os.access(script_path, os.X_OK):
-                    print(f"DEBUG: Script is executable")
-                else:
-                    print(f"DEBUG: Script is NOT executable")
-            else:
-                print(f"DEBUG: Script does NOT exist at {script_path}")
-                # List contents of /app/servers directory
-                try:
-                    import subprocess
-                    result = subprocess.run(["ls", "-la", "/app/servers"], capture_output=True, text=True)
-                    print(f"DEBUG: Contents of /app/servers: {result.stdout}")
-                except Exception as ls_error:
-                    print(f"DEBUG: Could not list /app/servers: {ls_error}")
-            
-            # Simple test to verify Python and script exist
-            print(f"DEBUG: Using Python path: {python_path}")
-            print(f"DEBUG: Using script path: {script_path}")
-            print(f"DEBUG: Script exists: {os.path.exists(script_path)}")
-            print(f"DEBUG: Script readable: {os.access(script_path, os.R_OK)}")
-            print(f"DEBUG: Script executable: {os.access(script_path, os.X_OK)}")
-            
-            stdio_server_params = StdioServerParameters(
-                command=python_path,
-                args=server_args[1:],  # Remove the first argument (python_path) since it's already in command
-            )
-            
-            print(f"DEBUG: About to start stdio client with params: {stdio_server_params}")
-            async with stdio_client(stdio_server_params) as (read, write):
-                print(f"DEBUG: stdio client started successfully")
-                try:
-                    async with ClientSession(read_stream=read, write_stream=write) as session:
-                        print(f"DEBUG: ClientSession created")
-                        try:
-                            await session.initialize()
-                            print(f"DEBUG: Session initialized")
-                        except Exception as init_error:
-                            print(f"DEBUG: Session initialization failed: {init_error}")
-                            raise Exception(f"MCP session initialization failed: {init_error}")
-                        
-                        try:
-                            tools = await load_mcp_tools(session)
-                            print(f"DEBUG: Loaded {len(tools)} tools")
-                        except Exception as tools_error:
-                            print(f"DEBUG: Failed to load MCP tools: {tools_error}")
-                            raise Exception(f"Failed to load MCP tools: {tools_error}")
-                        
-                        agent = create_react_agent(app.state.llm, tools)
-                        result = await agent.ainvoke({"messages": [HumanMessage(content=prompt)]})
-                        response_text = result["messages"][-1].content
-                except Exception as session_error:
-                    print(f"DEBUG: MCP session error: {session_error}")
-                    raise session_error
-        except ExceptionGroup as eg:
-            import traceback
-            print(f"DEBUG: ExceptionGroup occurred: {eg}")
-            print(f"DEBUG: ExceptionGroup exceptions: {eg.exceptions}")
-            print(f"DEBUG: Full traceback: {traceback.format_exc()}")
-            response_text = f"An error occurred: {eg}"
-        except Exception as e:
-            import traceback
-            print(f"DEBUG: Error occurred: {e}")
-            print(f"DEBUG: Full traceback: {traceback.format_exc()}")
-            response_text = f"An error occurred: {e}"
-        finally:
-            try:
-                # Send the full response as one piece for testing
-                print(f"DEBUG: Total response length: {len(response_text)}")
-                print(f"DEBUG: Response text: {repr(response_text)}")
-                print(f"DEBUG: Sending full response to queue")
-                await message_queues[session_id].put(response_text)
-                
-                await message_queues[session_id].put("END_STREAM")
-            except Exception as queue_error:
-                print(f"DEBUG: Error putting message in queue: {queue_error}")
-
-        print(f"Agent completed for session {session_id}: {response_text}")
-    
-    # Create task with proper error handling
-    task = asyncio.create_task(run_agent())
-    
-    # Add error handler to the task
-    def handle_task_exception(task):
-        try:
-            task.result()
-        except Exception as e:
-            print(f"DEBUG: Task exception handled: {e}")
-            import traceback
-            traceback.print_exc()
-    
-    task.add_done_callback(handle_task_exception)
-    return {
-        "message": "Request accepted", 
-        "session_id": session_id,
-        "status": "processing",
-        "note": "Use the SSE endpoint to receive the response stream"
-    }
-
-# --- Synchronous endpoint for simple queries (without SSE) ---
-@app.post("/query")
-async def direct_query(request: Request):
-    """Direct query endpoint that returns the response immediately (no streaming)."""
-    body = await request.json()
-    instance_url = request.query_params.get("instance_url")
-    instance_api_key = request.query_params.get("instance_api_key")
-    
-    if not instance_url:
-        raise HTTPException(status_code=400, detail="instance_url is required")
-    if not instance_api_key:
-        raise HTTPException(status_code=400, detail="instance_api_key is required")
-
-    prompt = body.get("prompt")
-    if not prompt:
-        raise HTTPException(status_code=400, detail="prompt is required")
-
-    print(f"Direct query: {prompt}")
-
-    try:
-        # Check if LLM is available
-        if not hasattr(app.state, 'llm') or app.state.llm is None:
-            return {
-                "success": False,
-                "error": "LLM not initialized. Please check server logs.",
-                "prompt": prompt,
-                "timestamp": "2025-08-11T02:30:00Z"
-            }
-            
-        # Create server parameters with instance variables as command line arguments
-        # Use sys.executable to get the current Python interpreter path
-        import sys
-        import os
-        python_path = sys.executable
-        script_path = os.path.join(os.getcwd(), "servers", "crm_server.py")
-        
-        server_args = [python_path, script_path]
-        if instance_url:
-            server_args.extend(["--instance-url", instance_url])
-        if instance_api_key:
-            server_args.extend(["--instance-api-key", instance_api_key])
-        
-        stdio_server_params = StdioServerParameters(
-            command=python_path,
-            args=server_args[1:],  # Remove the first argument (python_path) since it's already in command
-        )
-        
-        # Create a new MCP session for this request
-        async with stdio_client(stdio_server_params) as (read, write):
-            try:
-                async with ClientSession(read_stream=read, write_stream=write) as session:
-                    try:
-                        await session.initialize()
-                    except Exception as init_error:
-                        print(f"DEBUG: Session initialization failed: {init_error}")
-                        raise Exception(f"MCP session initialization failed: {init_error}")
-                    
-                    try:
-                        tools = await load_mcp_tools(session)
-                    except Exception as tools_error:
-                        print(f"DEBUG: Failed to load MCP tools: {tools_error}")
-                        raise Exception(f"Failed to load MCP tools: {tools_error}")
-                    
-                    # Create agent with tools for this request
-                    agent = create_react_agent(app.state.llm, tools)
-                    
-                    # ainvoke returns a dictionary
-                    result = await agent.ainvoke(
-                        {"messages": [HumanMessage(content=prompt)]}
-                    )
-                    response_text = result["messages"][-1].content
-                    
-                    return {
-                        "success": True,
-                        "response": response_text,
-                        "prompt": prompt,
-                        "timestamp": "2025-08-11T02:30:00Z"
+            "tools": [
+                {
+                    "name": "get_contacts",
+                    "description": "Get all contacts from the CRM module",
+                    "inputSchema": {"type": "object", "properties": {}}
+                },
+                {
+                    "name": "get_contact_relationships", 
+                    "description": "Get contact relationships from the CRM module",
+                    "inputSchema": {"type": "object", "properties": {}}
+                },
+                {
+                    "name": "get_contact_addresses",
+                    "description": "Get contact addresses from the CRM module",
+                    "inputSchema": {"type": "object", "properties": {}}
+                },
+                {
+                    "name": "get_companies",
+                    "description": "Get all companies from the CRM module",
+                    "inputSchema": {"type": "object", "properties": {}}
+                },
+                {
+                    "name": "get_company_relationships",
+                    "description": "Get company relationships from the CRM module",
+                    "inputSchema": {"type": "object", "properties": {}}
+                },
+                {
+                    "name": "get_company_addresses",
+                    "description": "Get company addresses from the CRM module",
+                    "inputSchema": {"type": "object", "properties": {}}
+                },
+                {
+                    "name": "get_system_fields",
+                    "description": "Get system fields from the CRM system",
+                    "inputSchema": {"type": "object", "properties": {}}
+                },
+                {
+                    "name": "get_contact_system_fields",
+                    "description": "Get contact custom fields from the CRM system",
+                    "inputSchema": {"type": "object", "properties": {}}
+                },
+                {
+                    "name": "get_company_system_fields",
+                    "description": "Get company custom fields from the CRM system",
+                    "inputSchema": {"type": "object", "properties": {}}
+                },
+                {
+                    "name": "save_contact",
+                    "description": "Save or update a contact in the CRM system",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "contact_data": {
+                                "type": "object",
+                                "description": "Contact data to save"
+                            }
+                        },
+                        "required": ["contact_data"]
                     }
-            except Exception as session_error:
-                print(f"DEBUG: MCP session error: {session_error}")
-                raise session_error
-                
-    except ExceptionGroup as eg:
-        import traceback
-        print(f"ExceptionGroup in direct query: {eg}")
-        print(f"ExceptionGroup exceptions: {eg.exceptions}")
-        print(f"Full traceback: {traceback.format_exc()}")
-        return {
-            "success": False,
-            "error": f"ExceptionGroup: {eg}",
-            "prompt": prompt,
-            "timestamp": "2025-08-11T02:30:00Z"
+                }
+            ]
         }
     except Exception as e:
-        import traceback
-        print(f"Error in direct query: {e}")
-        print(f"Full traceback: {traceback.format_exc()}")
-        return {
-            "success": False,
-            "error": str(e),
-            "prompt": prompt,
-            "timestamp": "2025-08-11T02:30:00Z"
-        }
+        raise HTTPException(status_code=400, detail=f"Invalid instance credentials: {str(e)}")
 
-# --- Endpoint for Server-Sent Events (SSE) streaming ---
-async def sse_generator(session_id: str):
-    """Generator to stream events to the client."""
-    # Ensure the message queue exists for this session
-    if session_id not in message_queues:
-        message_queues[session_id] = asyncio.Queue()
-        print(f"Created message queue for session {session_id}")
-
-    print(f"Starting SSE stream for session {session_id}")
+@app.post("/query")
+async def query_endpoint(request: QueryRequest):
+    """Direct query endpoint (synchronous response)."""
+    
+    if not app.state.llm:
+        raise HTTPException(status_code=500, detail="LLM not initialized")
     
     try:
-        # Send an immediate connection confirmation
-        yield f"data: CONNECTED\n\n"
-
-        while True:
-            try:
-                message = await message_queues[session_id].get()
-                print(f"DEBUG: SSE generator received message: {repr(message)}")
-                if message == "END_STREAM":
-                    print(f"DEBUG: SSE generator received END_STREAM")
-                    break
-                print(f"DEBUG: SSE generator yielding chunk: {repr(message)}")
-                # Properly format SSE data - escape newlines and ensure proper formatting
-                # Replace newlines with spaces for SSE compatibility
-                escaped_message = message.replace('\n', ' ')
-                yield f"data: {escaped_message}\n\n"
-                # Add a small delay to ensure the chunk is sent
-                await asyncio.sleep(0.01)
-            except asyncio.CancelledError:
-                print(f"SSE stream cancelled for session {session_id}")
-                break
-            except Exception as e:
-                print(f"DEBUG: Error in SSE stream for session {session_id}: {e}")
-                yield f"data: ERROR: {str(e)}\n\n"
-                break
-                
+        # Create CRM tools with the provided credentials
+        tools = create_crm_tools(request.instance_url, request.instance_api_key)
+        
+        # Create the agent with tools
+        agent_executor = create_react_agent(app.state.llm, tools)
+        
+        # Process the query
+        result = await agent_executor.ainvoke({
+            "messages": [HumanMessage(content=request.prompt)]
+        })
+        
+        # Extract the response
+        response_content = result["messages"][-1].content if result.get("messages") else "No response generated"
+        
+        return {
+            "response": response_content,
+            "success": True
+        }
+        
     except Exception as e:
-        print(f"DEBUG: Critical error in SSE generator for session {session_id}: {e}")
+        print(f"Error in query endpoint: {e}")
         import traceback
         traceback.print_exc()
-        yield f"data: CRITICAL_ERROR: {str(e)}\n\n"
-    finally:
-        print(f"Stream ended for session {session_id}")
-        # Clean up the queue
-        try:
-            if session_id in message_queues:
-                del message_queues[session_id]
-        except Exception as cleanup_error:
-            print(f"DEBUG: Error cleaning up queue for session {session_id}: {cleanup_error}")
+        return {
+            "error": str(e),
+            "success": False
+        }
+
+@app.post("/messages")
+async def messages_endpoint(
+    request: MessageRequest,
+    session_id: str
+):
+    """Send a prompt to the CRM agent (with SSE streaming)."""
+    
+    if not app.state.llm:
+        raise HTTPException(status_code=500, detail="LLM not initialized")
+    
+    try:
+        # Create CRM tools with the provided credentials
+        tools = create_crm_tools(request.instance_url, request.instance_api_key)
+        
+        # Create the agent with tools
+        agent_executor = create_react_agent(app.state.llm, tools)
+        
+        # Create a queue for this session if it doesn't exist
+        if session_id not in message_queues:
+            message_queues[session_id] = asyncio.Queue()
+        
+        # Process the query asynchronously and put result in queue
+        async def process_query():
+            try:
+                result = await agent_executor.ainvoke({
+                    "messages": [HumanMessage(content=request.prompt)]
+                })
+                
+                response_content = result["messages"][-1].content if result.get("messages") else "No response generated"
+                
+                await message_queues[session_id].put({
+                    "type": "response",
+                    "content": response_content,
+                    "session_id": session_id
+                })
+                
+                # Signal end of stream
+                await message_queues[session_id].put({"type": "end"})
+                
+            except Exception as e:
+                await message_queues[session_id].put({
+                    "type": "error",
+                    "content": str(e),
+                    "session_id": session_id
+                })
+        
+        # Start processing in background
+        asyncio.create_task(process_query())
+        
+        return {"status": "processing", "session_id": session_id}
+        
+    except Exception as e:
+        print(f"Error in messages endpoint: {e}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Message processing failed: {str(e)}")
 
 @app.get("/sse")
-async def sse(request: Request):
-    session_id = request.query_params.get("session_id")
-    instance_url = request.query_params.get("instance_url")
-    instance_api_key = request.query_params.get("instance_api_key")
+async def sse_endpoint(session_id: str):
+    """Server-Sent Events stream for real-time responses."""
     
-    if not session_id:
-        raise HTTPException(status_code=400, detail="session_id is required")
+    async def event_generator():
+        try:
+            if session_id not in message_queues:
+                yield f"data: {json.dumps({'error': 'Session not found'})}\n\n"
+                return
+            
+            queue = message_queues[session_id]
+            
+            while True:
+                try:
+                    # Wait for message with timeout
+                    message = await asyncio.wait_for(queue.get(), timeout=30.0)
+                    
+                    if message["type"] == "end":
+                        break
+                    
+                    yield f"data: {json.dumps(message)}\n\n"
+                    
+                except asyncio.TimeoutError:
+                    # Send keep-alive
+                    yield f"data: {json.dumps({'type': 'ping'})}\n\n"
+                    
+        except Exception as e:
+            yield f"data: {json.dumps({'error': str(e)})}\n\n"
+        finally:
+            # Clean up the queue
+            if session_id in message_queues:
+                del message_queues[session_id]
     
-    return StreamingResponse(sse_generator(session_id), media_type="text/event-stream")
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Headers": "*",
+        }
+    )
+
+if __name__ == "__main__":
+    import uvicorn
+    port = int(os.environ.get("PORT", 8080))
+    uvicorn.run(app, host="0.0.0.0", port=port)

@@ -1,11 +1,19 @@
+# Core MCP dependencies
 mcp>=1.0.0
 langchain-mcp-adapters>=0.1.9
 langchain-google-vertexai>=0.1.0
 langgraph>=0.0.30
-python-dotenv>=1.1.1
-uvicorn>=0.30.1
+
+# Web framework
 fastapi>=0.111.0
+uvicorn[standard]>=0.30.1
+
+# Utilities
+python-dotenv>=1.1.1
 aiofiles>=23.2.1
 pydantic-settings>=2.2.1
 requests>=2.32.3
 
+# Performance (explicitly include these since uvicorn[standard] might not work in all environments)
+httptools>=0.5.0
+uvloop>=0.17.0; sys_platform != "win32"
