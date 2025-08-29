@@ -40,6 +40,7 @@ COPY --from=builder /usr/local/bin /usr/local/bin
 COPY --chown=appuser:appuser main.py .
 COPY --chown=appuser:appuser servers/ ./servers/
 COPY --chown=appuser:appuser requirements.txt .
+# COPY --chown=appuser:appuser cache_manager.py .
 
 # Create __init__.py files to ensure proper Python module structure
 RUN touch /app/__init__.py && \
