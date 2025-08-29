@@ -30,7 +30,7 @@ load_dotenv()
 # --- IMPORTANT: These environment variables MUST be set in your Cloud Run service or .env file ---
 GCP_PROJECT_ID = os.getenv("GCP_PROJECT_ID")
 GCP_REGION = os.getenv("GCP_REGION")
-GEMINI_MODEL_NAME = os.getenv("GEMINI_MODEL_NAME", "gemini-1.5-flash")
+GEMINI_MODEL_NAME = os.getenv("GEMINI_MODEL_NAME", "gemini-2.5-flash")
 # REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
 # CACHE_TTL_SECONDS = int(os.getenv("CACHE_TTL_SECONDS", "3600"))
 # ENABLE_CACHING = os.getenv("ENABLE_CACHING", "true").lower() == "true"
