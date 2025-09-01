@@ -5,7 +5,14 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Insites AI Assistant</title>
     <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Poppins:ital,wght@0,100;0,200;0,300;0,400;0,500;0,600;0,700;0,800;0,900;1,100;1,200;1,300;1,400;1,500;1,600;1,700;1,800;1,900&display=swap" rel="stylesheet">
     <style>
+        html, body {
+            height: 100%;
+            font-family: "Poppins", sans-serif !important;
+        }
         .typing-indicator {
             display: inline-block;
             width: 20px;
@@ -34,7 +41,6 @@
             padding: 0.75rem 1rem;
             border-radius: 1rem;
             word-wrap: break-word;
-            white-space: pre-wrap;
         }
         .message-bubble-response {
             max-width: 80%;
@@ -51,6 +57,22 @@
             background-color: #f3f4f6;
             color: #1f2937;
             border-bottom-left-radius: 0.25rem;
+        }
+        .message-bubble.agent hr{
+            margin: 0 0 16px;
+        }
+        .message-bubble.agent hr:last-child{
+            margin: 0;
+            display: none;
+        }
+        .message-bubble.agent>p{
+            margin: 0 0 16px;
+        }
+        .message-bubble.agent>ul>li{
+            margin: 0 0 16px;
+        }
+        .message-bubble.agent>ul>li p~ul{
+            margin: 0 0 0 16px;
         }
         
         /* Cursor effect for streaming responses */
@@ -79,8 +101,17 @@
             font-size: 0.875rem;
             color: #1e40af;
         }
+        .chat-wrapper {
+            height: 100%;
+        }
+        .chat-container {
+            height: 100%;
+            display: flex;
+            flex-direction: column;
+        }
         #chat-container {
-            height: 400px;
+            /* height: 400px; */
+            flex: 1;
             overflow-y: auto;
             scroll-behavior: smooth;
             scrollbar-width: thin;
@@ -103,11 +134,32 @@
         #chat-container::-webkit-scrollbar-thumb:hover {
             background: #a0aec0;
         }
+
+        #tools-modal
+
+        /* Overrides */
+        b, strong {
+            font-weight: 600;
+        }
+        .bg-blue-600 {
+            background-color: rgba(67, 108, 242, var(--tw-bg-opacity))
+        }
+        .text-blue-600 {
+            color: rgba(67, 108, 242, var(--tw-text-opacity));
+        }
+        .to-purple-600 {
+            --tw-gradient-to: #8843F2;
+        }
+        .from-blue-600 {
+            --tw-gradient-from: #436CF2;
+            --tw-gradient-stops: var(--tw-gradient-from), var(--tw-gradient-to, rgba(67, 108, 242, 0));
+        }
     </style>
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
 </head>
 <body class="bg-gray-50 min-h-screen">
-    <div class="container mx-auto px-4 py-8 max-w-4xl">
-        <div class="bg-white rounded-lg shadow-lg overflow-hidden">
+    <div class="chat-wrapper container mx-auto px-4 py-8 max-w-4xl">
+        <div class="chat-container bg-white rounded-lg shadow-lg overflow-hidden">
             <!-- Header -->
             <div class="bg-gradient-to-r from-blue-600 to-purple-600 text-white p-6">
                 <h1 class="text-3xl font-bold text-center">Insites AI Assistant</h1>
@@ -169,7 +221,7 @@
 
             <!-- Tools Modal -->
             <div id="tools-modal" class="fixed inset-0 bg-gray-600 bg-opacity-50 hidden z-50 p-2 sm:p-4">
-                <div class="flex items-center justify-center min-h-screen w-full">
+                <div class="flex items-center justify-center w-full">
                     <div class="bg-white rounded-lg shadow-xl w-full max-w-xs sm:max-w-sm md:max-w-2xl lg:max-w-4xl xl:max-w-6xl max-h-[95vh] sm:max-h-[90vh] overflow-hidden mx-2">
                         <!-- Header -->
                         <div class="bg-gradient-to-r from-blue-600 to-purple-600 text-white p-3 sm:p-4 md:p-6">
@@ -344,7 +396,10 @@
                 `;
             } else {
                 messageBubble.className = `message-bubble ${sender}`;
-                messageBubble.innerHTML = `<strong>${sender === 'user' ? 'You' : sender === 'agent' ? 'Assistant' : 'System'}:</strong> ${text}`;
+                const markdownString = text;
+                console.log(text)
+                const htmlString = marked.parse(markdownString, { breaks: true });
+                messageBubble.innerHTML = `<strong>${sender === 'user' ? 'You' : sender === 'agent' ? 'Assistant' : 'System'}:</strong> ${htmlString}`;
             }
             
             messageContainer.appendChild(messageBubble);
