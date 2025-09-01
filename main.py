@@ -3,6 +3,7 @@ import os
 import uuid
 import json
 import uvicorn
+import hashlib
 from dotenv import load_dotenv
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import StreamingResponse
@@ -15,6 +16,7 @@ from typing import Dict, Any, Optional
 import httpx
 from pydantic import BaseModel
 
+
 # Import CRM tools directly
 from servers.crm_tools import CRMTools
 
@@ -24,7 +26,10 @@ load_dotenv()
 # --- Configuration with graceful defaults for build-time ---
 GCP_PROJECT_ID = os.getenv("GCP_PROJECT_ID")
 GCP_REGION = os.getenv("GCP_REGION") 
-GEMINI_MODEL_NAME = os.getenv("GEMINI_MODEL_NAME", "gemini-1.5-pro")
+GEMINI_MODEL_NAME = os.getenv("GEMINI_MODEL_NAME", "gemini-2.5-flash")
+# REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
+# CACHE_TTL_SECONDS = int(os.getenv("CACHE_TTL_SECONDS", "3600"))
+# ENABLE_CACHING = os.getenv("ENABLE_CACHING", "true").lower() == "true"
 
 # Handle credentials
 CREDENTIALS_PATH = os.path.join(os.path.dirname(__file__), "vertex-credentials.json")
@@ -38,6 +43,14 @@ else:
         print(f"Using credentials from environment: {env_credentials}")
     else:
         print("Using default service account credentials from Cloud Run")
+
+# try:
+#     from cache_manager import CacheManager
+#     CACHING_AVAILABLE = True
+# except ImportError:
+#     print("⚠️ cache_manager.py not found - caching disabled")
+#     CacheManager = None
+#     CACHING_AVAILABLE = False
 
 # Only validate required vars if not in build mode (when they're actually needed)
 def validate_environment():
@@ -63,18 +76,46 @@ class ToolsRequest(BaseModel):
     instance_url: str
     instance_api_key: str
 
+# def get_redis_config():
+#     """Get Redis configuration from environment variables."""
+#     # Option 1: Direct Redis URL
+#     redis_url = os.getenv("REDIS_URL")
+#     if redis_url:
+#         return {"redis_url": redis_url}
+#     return None
+
 # --- FastAPI App ---
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup
     print("🚀 Starting MCP CRM Server...")
+    # redis_config = get_redis_config()
+
+    # # Initialize cache manager
+    # if CACHING_AVAILABLE and ENABLE_CACHING:
+    #     try:
+    #         redis_config = get_redis_config() or {"redis_url": REDIS_URL}
+    #         app.state.cache_manager = CacheManager(redis_config, CACHE_TTL_SECONDS)
+    #         await app.state.cache_manager.initialize()
+    #         # Log Redis configuration (without sensitive info)
+    #         if "redis_url" in redis_config:
+    #             # Hide password in URL for logging
+    #             safe_url = redis_config["redis_url"].split('@')[-1] if '@' in redis_config["redis_url"] else redis_config["redis_url"]
+    #             print(f"🔄 Redis URL: {safe_url}")
+    #     except Exception as e:
+    #         print(f"⚠️ Cache initialization failed: {e}")
+    #         app.state.cache_manager = None
+    # else:
+    #     print("⚠️ Caching disabled")
+    #     app.state.cache_manager = None
+    #     if not CACHING_AVAILABLE:
+    #         print("⚠️ Caching not available - cache_manager.py missing")
+    #     else:
+    #         print("⚠️ Caching disabled by configuration")
     
     # Validate environment at startup (runtime)
     try:
         validate_environment()
-        print(f"📋 Project ID: {GCP_PROJECT_ID}")
-        print(f"🌍 Region: {GCP_REGION}")
-        print(f"🤖 Model: {GEMINI_MODEL_NAME}")
     except ValueError as e:
         print(f"❌ Environment validation failed: {e}")
         app.state.llm = None
@@ -279,6 +320,30 @@ async def query_endpoint(request: QueryRequest):
         raise HTTPException(status_code=500, detail="LLM not initialized")
     
     try:
+        # # Step 1: Check cache first (if available)
+        # cache_manager = app.state.cache_manager
+        # cached_response = None
+        
+        # if cache_manager is not None:
+        #     try:
+        #         cached_response = await cache_manager.get_cached_response(
+        #             query=request.prompt,
+        #             instance_url=request.instance_url,
+        #             user_context={"api_key_hash": hashlib.sha256(request.instance_api_key.encode()).hexdigest()[:8]}
+        #         )
+        #     except Exception as cache_error:
+        #         print(f"Cache error: {cache_error}")
+        #         cached_response = None
+        
+        # if cached_response:
+        #     return {
+        #         "response": cached_response.get("response", ""),
+        #         "success": True,
+        #         "cached": True,
+        #         "cached_at": cached_response.get("cached_at")
+        #     }
+        
+        # Step 2: Process with AI if not cached
         # Create CRM tools with the provided credentials
         tools = create_crm_tools(request.instance_url, request.instance_api_key)
         
@@ -293,10 +358,25 @@ async def query_endpoint(request: QueryRequest):
         # Extract the response
         response_content = result["messages"][-1].content if result.get("messages") else "No response generated"
         
+        # # Step 3: Cache the response for future use (if cache is available)
+        # if cache_manager is not None:
+        #     try:
+        #         await cache_manager.cache_response(
+        #             query=request.prompt,
+        #             response=response_content,
+        #             instance_url=request.instance_url,
+        #             user_context={"api_key_hash": hashlib.sha256(request.instance_api_key.encode()).hexdigest()[:8]},
+        #             metadata={"model": GEMINI_MODEL_NAME, "endpoint": "query"}
+        #         )
+        #     except Exception as cache_error:
+        #         print(f"Cache storage error: {cache_error}")
+        
         return {
             "response": response_content,
-            "success": True
+            "success": True,
+            # "cached": False
         }
+
         
     except Exception as e:
         print(f"Error in query endpoint: {e}")
@@ -407,6 +487,35 @@ async def sse_endpoint(session_id: str):
             "Access-Control-Allow-Headers": "*",
         }
     )
+
+# @app.get("/cache/stats")
+# async def cache_stats():
+#     """Get cache statistics and performance metrics."""
+#     if not hasattr(app.state, 'cache_manager'):
+#         return {"error": "Cache manager not initialized"}
+    
+#     stats = await app.state.cache_manager.get_cache_stats()
+#     return {
+#         "cache_stats": stats,
+#         "config": {
+#             "enabled": ENABLE_CACHING,
+#             "ttl_seconds": CACHE_TTL_SECONDS,
+#             "redis_url": REDIS_URL.split('@')[-1] if '@' in REDIS_URL else REDIS_URL  # Hide credentials
+#         }
+#     }
+
+# @app.post("/cache/clear")
+# async def clear_cache():
+#     """Clear all cached responses."""
+#     if not hasattr(app.state, 'cache_manager'):
+#         return {"error": "Cache manager not initialized"}
+    
+#     deleted_count = await app.state.cache_manager.clear_cache()
+#     return {
+#         "success": True,
+#         "deleted_keys": deleted_count,
+#         "message": f"Cleared {deleted_count} cached responses"
+#     }
 
 if __name__ == "__main__":
     import uvicorn

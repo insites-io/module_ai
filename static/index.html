@@ -3,9 +3,16 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>MCP Math Agent Demo</title>
+    <title>Insites AI Assistant</title>
     <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Poppins:ital,wght@0,100;0,200;0,300;0,400;0,500;0,600;0,700;0,800;0,900;1,100;1,200;1,300;1,400;1,500;1,600;1,700;1,800;1,900&display=swap" rel="stylesheet">
     <style>
+        html, body {
+            height: 100%;
+            font-family: "Poppins", sans-serif !important;
+        }
         .typing-indicator {
             display: inline-block;
             width: 20px;
@@ -35,6 +42,12 @@
             border-radius: 1rem;
             word-wrap: break-word;
         }
+        .message-bubble-response {
+            max-width: 80%;
+            padding: 0.75rem 1rem;
+            border-radius: 1rem;
+            word-wrap: break-word;
+        }
         .message-bubble.user {
             background-color: #3b82f6;
             color: white;
@@ -44,6 +57,35 @@
             background-color: #f3f4f6;
             color: #1f2937;
             border-bottom-left-radius: 0.25rem;
+        }
+        .message-bubble.agent hr{
+            margin: 0 0 16px;
+        }
+        .message-bubble.agent hr:last-child{
+            margin: 0;
+            display: none;
+        }
+        .message-bubble.agent>p{
+            margin: 0 0 16px;
+        }
+        .message-bubble.agent>ul>li{
+            margin: 0 0 16px;
+        }
+        .message-bubble.agent>ul>li p~ul{
+            margin: 0 0 0 16px;
+        }
+        
+        /* Cursor effect for streaming responses */
+        .message-bubble.agent.streaming::after {
+            content: '|';
+            animation: blink 1s infinite;
+            color: #3b82f6;
+            font-weight: bold;
+        }
+        
+        @keyframes blink {
+            0%, 50% { opacity: 1; }
+            51%, 100% { opacity: 0; }
         }
         .message-bubble.system {
             background-color: #fef3c7;
@@ -59,11 +101,65 @@
             font-size: 0.875rem;
             color: #1e40af;
         }
+        .chat-wrapper {
+            height: 100%;
+        }
+        .chat-container {
+            height: 100%;
+            display: flex;
+            flex-direction: column;
+        }
+        #chat-container {
+            /* height: 400px; */
+            flex: 1;
+            overflow-y: auto;
+            scroll-behavior: smooth;
+            scrollbar-width: thin;
+            scrollbar-color: #cbd5e0 #f7fafc;
+        }
+        
+        #chat-container::-webkit-scrollbar {
+            width: 8px;
+        }
+        
+        #chat-container::-webkit-scrollbar-track {
+            background: #f7fafc;
+        }
+        
+        #chat-container::-webkit-scrollbar-thumb {
+            background: #cbd5e0;
+            border-radius: 4px;
+        }
+        
+        #chat-container::-webkit-scrollbar-thumb:hover {
+            background: #a0aec0;
+        }
+
+        #tools-modal
+
+        /* Overrides */
+        b, strong {
+            font-weight: 600;
+        }
+        .bg-blue-600 {
+            background-color: rgba(67, 108, 242, var(--tw-bg-opacity))
+        }
+        .text-blue-600 {
+            color: rgba(67, 108, 242, var(--tw-text-opacity));
+        }
+        .to-purple-600 {
+            --tw-gradient-to: #8843F2;
+        }
+        .from-blue-600 {
+            --tw-gradient-from: #436CF2;
+            --tw-gradient-stops: var(--tw-gradient-from), var(--tw-gradient-to, rgba(67, 108, 242, 0));
+        }
     </style>
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
 </head>
 <body class="bg-gray-50 min-h-screen">
-    <div class="container mx-auto px-4 py-8 max-w-4xl">
-        <div class="bg-white rounded-lg shadow-lg overflow-hidden">
+    <div class="chat-wrapper container mx-auto px-4 py-8 max-w-4xl">
+        <div class="chat-container bg-white rounded-lg shadow-lg overflow-hidden">
             <!-- Header -->
             <div class="bg-gradient-to-r from-blue-600 to-purple-600 text-white p-6">
                 <h1 class="text-3xl font-bold text-center">Insites AI Assistant</h1>
@@ -77,11 +173,12 @@
                     </button>
                 </div>
             </div>
+            
             <!-- Chat Container -->
-            <div class="h-96 overflow-y-auto p-4 bg-gray-50" id="chat-container">
+            <div id="chat-container" class="p-4 bg-gray-50">
                 <div id="messages">
                     <div class="message-container agent">
-                        <div class="message-bubble agent">
+                        <div class="message-bubble-response agent">
                             <strong>Assistant:</strong> Hello! I'm your Insites AI Assistant. How can I help you today?
                         </div>
                     </div>
@@ -94,6 +191,7 @@
                     <input 
                         type="text" 
                         id="prompt-input"
+                        placeholder="Type your message..."
                         class="flex-grow p-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                         disabled
                     >
@@ -110,9 +208,20 @@
                 </div>
             </div>
 
+            <!-- Scroll to Bottom Button -->
+            <button 
+                id="scroll-to-bottom-btn" 
+                class="fixed bottom-24 right-8 bg-blue-600 text-white p-3 rounded-full shadow-lg hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 transition-all duration-200 opacity-0 pointer-events-none z-40"
+                title="Scroll to latest message"
+            >
+                <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 14l-7 7m0 0l-7-7m7 7V3"></path>
+                </svg>
+            </button>
+
             <!-- Tools Modal -->
             <div id="tools-modal" class="fixed inset-0 bg-gray-600 bg-opacity-50 hidden z-50 p-2 sm:p-4">
-                <div class="flex items-center justify-center min-h-screen w-full">
+                <div class="flex items-center justify-center w-full">
                     <div class="bg-white rounded-lg shadow-xl w-full max-w-xs sm:max-w-sm md:max-w-2xl lg:max-w-4xl xl:max-w-6xl max-h-[95vh] sm:max-h-[90vh] overflow-hidden mx-2">
                         <!-- Header -->
                         <div class="bg-gradient-to-r from-blue-600 to-purple-600 text-white p-3 sm:p-4 md:p-6">
@@ -209,11 +318,15 @@
     </div>
 
     <script>
+        // Core elements
         const input = document.getElementById('prompt-input');
         const sendButton = document.getElementById('send-button');
         const messagesDiv = document.getElementById('messages');
+        const chatContainer = document.getElementById('chat-container');
         const connectionStatus = document.getElementById('connection-status');
+        const scrollToBottomBtn = document.getElementById('scroll-to-bottom-btn');
 
+        // Connection state
         let eventSource;
         let sessionId;
         let isStreaming = false;
@@ -222,46 +335,211 @@
         const maxReconnectAttempts = 5;
         let currentResponse = '';
         let currentMessageContainer = null;
+
+        // Scroll state
+        let isUserScrolling = false;
+        let scrollTimeout = null;
         
         // Global instance configuration
         const INSTANCE_UUID = "6153cf7d-0f2c-47cf-a71a-69e308ff08b3";
         const INSTANCE_URL = "https://iia-eric-v2.staging.oregon.platform-os.com";
         const INSTANCE_API_KEY = "instance_6153cf7d-0f2c-47cf-a71a-69e308ff08b3_PEpn2gnKf1BVeVHmeJfIufnsiam72sl_s5LsfoxmnFQ";
 
-        // // Tools modal elements
-        // const toolsModal = document.getElementById('tools-modal');
-        // const toolsButton = document.getElementById('tools-button');
-        // const closeToolsModal = document.getElementById('close-tools-modal');
-        // const toolsLoading = document.getElementById('tools-loading');
-        // const toolsContent = document.getElementById('tools-content');
-        // const toolsList = document.getElementById('tools-list');
-        // const toolsError = document.getElementById('tools-error');
-        // const retryTools = document.getElementById('retry-tools');
-
-        // // Pagination elements
-        // const currentRange = document.getElementById('current-range');
-        // const totalTools = document.getElementById('total-tools');
-        // const currentPage = document.getElementById('current-page');
-        // const totalPages = document.getElementById('total-pages');
-        // const prevPageButton = document.getElementById('prev-page');
-        // const nextPageButton = document.getElementById('next-page');
-
-        // // Search element
-        // const toolsSearch = document.getElementById('tools-search');
-        // const clearSearchButton = document.getElementById('clear-search');
-
-        // Pagination state
+        // Tools modal state
         let allTools = [];
         let filteredTools = [];
         let currentPageIndex = 1;
         const toolsPerPage = 5;
-        let requiredElements = {}
-        function initializeApp() {
-            console.log('🚀 Initializing application...');
-            console.log('🚀 Document ready state:', document.readyState);
-            console.log('🚀 Document body:', document.body);
+        let requiredElements = {};
+
+        // ===== SCROLLING FUNCTIONS =====
+        
+        function scrollToBottom() {
+            chatContainer.scrollTop = chatContainer.scrollHeight;
+        }
+
+        function isNearBottom() {
+            return (chatContainer.scrollHeight - chatContainer.scrollTop - chatContainer.clientHeight) < 100;
+        }
+
+        function smartScrollToBottom() {
+            if (!isUserScrolling || isNearBottom()) {
+                requestAnimationFrame(() => {
+                    scrollToBottom();
+                });
+            }
+        }
+
+        function updateScrollButton() {
+            if (isNearBottom()) {
+                scrollToBottomBtn.classList.add('opacity-0', 'pointer-events-none');
+            } else {
+                scrollToBottomBtn.classList.remove('opacity-0', 'pointer-events-none');
+            }
+        }
+
+        // ===== MESSAGE FUNCTIONS =====
+        
+        function addMessage(sender, text, isTyping = false) {
+            const messageContainer = document.createElement('div');
+            messageContainer.className = `message-container ${sender}`;
             
-            // Check if all required elements exist
+            const messageBubble = document.createElement('div');
+           
+            
+            if (isTyping) {
+                messageBubble.className = `message-bubble-response ${sender}`;
+                messageBubble.innerHTML = `
+                    <strong>Assistant:</strong> 
+                    <span class="typing-indicator"></span>
+                    <span>Processing your request...</span>
+                `;
+            } else {
+                messageBubble.className = `message-bubble ${sender}`;
+                const markdownString = text;
+                console.log(text)
+                const htmlString = marked.parse(markdownString, { breaks: true });
+                messageBubble.innerHTML = `<strong>${sender === 'user' ? 'You' : sender === 'agent' ? 'Assistant' : 'System'}:</strong> ${htmlString}`;
+            }
+            
+            messageContainer.appendChild(messageBubble);
+            messagesDiv.appendChild(messageContainer);
+            
+            smartScrollToBottom();
+            
+            return messageContainer;
+        }
+
+        function updateConnectionStatus(status, isError = false) {
+            connectionStatus.textContent = status;
+            connectionStatus.className = `mt-2 text-sm ${isError ? 'text-red-500' : 'text-green-500'}`;
+        }
+
+        // ===== CONNECTION FUNCTIONS =====
+        
+        function closeEventSource() {
+            if (eventSource) {
+                eventSource.close();
+                eventSource = null;
+                isStreaming = false;
+            }
+        }
+
+        async function startStreaming() {
+            closeEventSource();
+            
+            if (!sessionId) {
+                sessionId = 'session-' + Math.random().toString(36).substr(2, 9);
+            }
+            
+            try {
+                updateConnectionStatus("Connecting to server...", false);
+                eventSource = new EventSource(`/sse?session_id=${sessionId}&instance_url=${INSTANCE_URL}&instance_api_key=${INSTANCE_API_KEY}`);
+                
+                eventSource.onmessage = function(event) {
+                    if (event.data === "CONNECTED") {
+                        isStreaming = true;
+                        isConnected = true;
+                        reconnectAttempts = 0;
+                        updateConnectionStatus("Connected to server", false);
+                        input.disabled = false;
+                        sendButton.disabled = false;
+                        return;
+                    }
+                    
+                    if (event.data === "END_STREAM") {
+                        isStreaming = false;
+                        updateConnectionStatus("Ready for new requests", false);
+                        reconnectAttempts = 0;
+                        currentResponse = '';
+                        currentMessageContainer = null;
+                        smartScrollToBottom();
+                        return;
+                    }
+                    
+                    // Remove typing indicator
+                    const typingIndicator = document.querySelector('.typing-indicator');
+                    if (typingIndicator) {
+                        typingIndicator.closest('.message-container').remove();
+                    }
+                    
+                    // Handle response chunks
+                    if (event.data !== "CONNECTED" && event.data !== "END_STREAM") {
+                        const formattedData = event.data.replace(/\\n/g, '\n');
+                        currentResponse = formattedData;
+                        
+                        if (!currentMessageContainer) {
+                            currentMessageContainer = addMessage('agent', currentResponse);
+                            // Add streaming class for cursor effect
+                            // const messageBubble = currentMessageContainer.querySelector('.message-bubble');
+                            // messageBubble.classList.add('streaming');
+                        } else {
+                            const messageBubble = currentMessageContainer.querySelector('.message-bubble');
+                            const htmlFormatted = currentResponse.replace(/\n/g, '<br>');
+                            // const formattedResponse = currentResponse.replace(/\n/g, '<br>');
+                            messageBubble.innerHTML = `<strong>Assistant:</strong> ${htmlFormatted}`;
+                            smartScrollToBottom();
+                        }
+                    }
+                };
+                
+                eventSource.onerror = function(err) {
+                    closeEventSource();
+                    isConnected = false;
+                    
+                    if (reconnectAttempts < maxReconnectAttempts) {
+                        reconnectAttempts++;
+                        updateConnectionStatus(`Connection lost. Reconnecting... (${reconnectAttempts}/${maxReconnectAttempts})`, true);
+                        setTimeout(() => startStreaming(), 1000);
+                    } else {
+                        updateConnectionStatus("Connection failed. Please refresh the page.", true);
+                        input.disabled = true;
+                        sendButton.disabled = true;
+                    }
+                };
+                
+            } catch (error) {
+                updateConnectionStatus("Failed to connect to server", true);
+            }
+        }
+
+        async function sendMessage() {
+            const prompt = input.value.trim();
+            if (!prompt || !isConnected) return;
+
+            currentResponse = '';
+            currentMessageContainer = null;
+
+            addMessage('user', prompt);
+            input.value = '';
+            addMessage('agent', '', true);
+
+            try {
+                updateConnectionStatus("Processing request...", false);
+                
+                const response = await fetch(`/messages?session_id=${sessionId}&instance_url=${INSTANCE_URL}&instance_api_key=${INSTANCE_API_KEY}`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ prompt: prompt })
+                });
+
+                if (!response.ok) {
+                    const error = await response.json();
+                    addMessage('system', `Error: ${error.detail || 'Failed to send message'}`);
+                    updateConnectionStatus("Error occurred", true);
+                } else {
+                    updateConnectionStatus("Request sent successfully", false);
+                }
+
+            } catch (error) {
+                addMessage('system', `Network error: ${error.message}`);
+                updateConnectionStatus("Network error occurred", true);
+            }
+        }
+
+        // ===== TOOLS MODAL FUNCTIONS =====
+        
+        function initializeApp() {
             requiredElements = {
                 sendButton: document.getElementById('send-button'),
                 input: document.getElementById('prompt-input'),
@@ -283,468 +561,113 @@
                 currentPage: document.getElementById('current-page'),
                 totalPages: document.getElementById('total-pages')
             };
-            
-            // Log what we found
-            console.log('🔍 Element search results:');
-            for (const [name, element] of Object.entries(requiredElements)) {
-                console.log(`  ${name}: ${element ? '✅ Found' : '❌ Missing'}`);
-            }
-            
+
             // Verify all elements exist
             for (const [name, element] of Object.entries(requiredElements)) {
                 if (!element) {
-                    console.error(`❌ Required element not found: ${name}`);
-                    console.error(`❌ Cannot initialize application without all elements`);
+                    console.error(`Required element not found: ${name}`);
                     return;
                 }
             }
-            
-            console.log('✅ All required elements found, setting up event listeners...');
-            
-            // Tools modal event listeners
-            requiredElements.toolsButton.addEventListener('click', () => showToolsModal(requiredElements));
-            requiredElements.closeToolsModal.addEventListener('click', () => hideToolsModal(requiredElements));
-            requiredElements.retryTools.addEventListener('click', () => loadTools(requiredElements));
-            
 
-            
-            // Mobile close button
+            // Tools modal event listeners
+            requiredElements.toolsButton.addEventListener('click', showToolsModal);
+            requiredElements.closeToolsModal.addEventListener('click', hideToolsModal);
+            requiredElements.retryTools.addEventListener('click', loadTools);
             requiredElements.mobileCloseTools.addEventListener('click', hideToolsModal);
-            
-            // Pagination event listeners
             requiredElements.prevPageButton.addEventListener('click', goToPrevPage);
             requiredElements.nextPageButton.addEventListener('click', goToNextPage);
             
-            // Search event listener
             requiredElements.toolsSearch.addEventListener('input', (event) => {
                 filterTools(event.target.value);
             });
             
-            // Clear search button listener
             requiredElements.clearSearchButton.addEventListener('click', () => {
                 requiredElements.toolsSearch.value = '';
                 filterTools('');
                 requiredElements.clearSearchButton.classList.add('hidden');
             });
             
-            // Close modal when clicking outside
             requiredElements.toolsModal.addEventListener('click', (event) => {
                 if (event.target === requiredElements.toolsModal) {
                     hideToolsModal();
                 }
             });
             
-            // Close modal with Escape key
             document.addEventListener('keydown', (event) => {
                 if (event.key === 'Escape' && !requiredElements.toolsModal.classList.contains('hidden')) {
                     hideToolsModal();
                 }
             });
-            
-            console.log('✅ Event listeners set up successfully');
-            
-            // Add a simple test to verify everything is working
-            console.log('🎉 Application initialization complete!');
-            console.log('🎉 You should now be able to:');
-            console.log('  - Click the test buttons');
-            console.log('  - Open the tools modal');
-            console.log('  - Send chat messages');
         }
 
-        // Try to initialize immediately if DOM is already loaded
-        if (document.readyState === 'loading') {
-            // DOM is still loading, wait for DOMContentLoaded
-            document.addEventListener('DOMContentLoaded', initializeApp);
-        } else {
-            // DOM is already loaded, initialize immediately
-            initializeApp();
-        }
-        function addMessage(sender, text, isTyping = false) {
-            const messageContainer = document.createElement('div');
-            messageContainer.className = `message-container ${sender}`;
-            
-            const messageBubble = document.createElement('div');
-            messageBubble.className = `message-bubble ${sender}`;
-            
-            if (isTyping) {
-                messageBubble.innerHTML = `
-                    <strong>Assistant:</strong> 
-                    <span class="typing-indicator"></span>
-                    <span>Processing your request...</span>
-                `;
-            } else {
-                messageBubble.innerHTML = `<strong>${sender === 'user' ? 'You' : sender === 'agent' ? 'Assistant' : 'System'}:</strong> ${text}`;
-            }
-            
-            messageContainer.appendChild(messageBubble);
-            messagesDiv.appendChild(messageContainer);
-            messagesDiv.scrollTop = messagesDiv.scrollHeight;
-            
-            return messageContainer;
-        }
-
-        function updateConnectionStatus(status, isError = false) {
-            connectionStatus.textContent = status;
-            connectionStatus.className = `mt-2 text-sm ${isError ? 'text-red-500' : 'text-green-500'}`;
-        }
-
-        function closeEventSource() {
-            if (eventSource) {
-
-                eventSource.close();
-                eventSource = null;
-                isStreaming = false;
-            }
-        }
-
-        async function startStreaming() {
-            closeEventSource();
-            
-            // Generate a new session ID only if we don't have one
-            if (!sessionId) {
-                sessionId = 'session-' + Math.random().toString(36).substr(2, 9);
-                console.log('Generated new session ID:', sessionId);
-            } else {
-                console.log('Reusing existing session ID:', sessionId);
-            }
-            
-            try {
-                updateConnectionStatus("Connecting to server...", false);
-                eventSource = new EventSource(`/sse?session_id=${sessionId}&instance_url=${INSTANCE_URL}&instance_api_key=${INSTANCE_API_KEY}`);
-                
-                eventSource.onmessage = function(event) {
-                    
-                    if (event.data === "CONNECTED") {
-                        // Connection confirmed, enable input
-                        isStreaming = true;
-                        isConnected = true;
-                        reconnectAttempts = 0;
-                        updateConnectionStatus("Connected to server", false);
-                        input.disabled = false;
-                        sendButton.disabled = false;
-                        return;
-                    }
-                    
-                    if (event.data === "END_STREAM") {
-
-                        // Don't close the connection, just mark as ready for next message
-                        isStreaming = false;
-                        updateConnectionStatus("Ready for new requests", false);
-                        reconnectAttempts = 0; // Reset reconnect attempts on successful message
-                        
-                        // Reset for next response
-                        currentResponse = '';
-                        currentMessageContainer = null;
-                        return;
-                    }
-                    
-                    // Remove typing indicator if it exists
-                    const typingIndicator = document.querySelector('.typing-indicator');
-                    if (typingIndicator) {
-                        typingIndicator.closest('.message-container').remove();
-                    }
-                    
-                    // Handle response chunks
-                    if (event.data !== "CONNECTED" && event.data !== "END_STREAM") {
-                        console.log('Received chunk:', event.data);
-                        console.log('Chunk length:', event.data.length);
-                        currentResponse += event.data;
-                        console.log('Current response length:', currentResponse.length);
-                        console.log('Full response so far:', currentResponse);
-                        
-                        // Create or update the message container
-                        if (!currentMessageContainer) {
-                            currentMessageContainer = addMessage('agent', currentResponse);
-                        } else {
-                            // Update the existing message
-                            const messageBubble = currentMessageContainer.querySelector('.message-bubble');
-                            // Convert newlines to <br> tags for proper HTML display
-                            const formattedResponse = currentResponse.replace(/\n/g, '<br>');
-                            messageBubble.innerHTML = `<strong>Assistant:</strong> ${formattedResponse}`;
-                        }
-                    }
-                };
-                
-                eventSource.onopen = function() {
-                    // Connection opened, but wait for CONNECTED message to confirm
-                };
-                
-                eventSource.onerror = function(err) {
-
-                    closeEventSource();
-                    isConnected = false;
-                    
-                    if (reconnectAttempts < maxReconnectAttempts) {
-                        reconnectAttempts++;
-                        updateConnectionStatus(`Connection lost. Reconnecting... (${reconnectAttempts}/${maxReconnectAttempts})`, true);
-                        
-                        // Try to reconnect after a short delay
-                        setTimeout(() => {
-                            startStreaming();
-                        }, 1000);
-                    } else {
-                        updateConnectionStatus("Connection failed. Please refresh the page.", true);
-                        input.disabled = true;
-                        sendButton.disabled = true;
-                    }
-                };
-                
-            } catch (error) {
-                console.error("Failed to start streaming:", error);
-                updateConnectionStatus("Failed to connect to server", true);
-            }
-        }
-
-        async function sendMessage() {
-            const prompt = input.value.trim();
-            if (!prompt || !isConnected) return;
-
-            // Reset for new message
-            currentResponse = '';
-            currentMessageContainer = null;
-
-            console.log('Sending message with session ID:', sessionId);
-            console.log('Is connected:', isConnected);
-            console.log('Is streaming:', isStreaming);
-
-            // Add user message
-            addMessage('user', prompt);
-            input.value = '';
-            
-            // Add typing indicator
-            addMessage('agent', '', true);
-
-            try {
-                updateConnectionStatus("Processing request...", false);
-                
-                const response = await fetch(`/messages?session_id=${sessionId}&instance_url=${INSTANCE_URL}&instance_api_key=${INSTANCE_API_KEY}`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ prompt: prompt })
-                });
-
-                if (!response.ok) {
-                    const error = await response.json();
-                    addMessage('system', `Error: ${error.detail || 'Failed to send message'}`);
-                    updateConnectionStatus("Error occurred", true);
-                } else {
-                    updateConnectionStatus("Request sent successfully", false);
-                }
-
-            } catch (error) {
-                console.error("Network error:", error);
-                addMessage('system', `Network error: ${error.message}`);
-                updateConnectionStatus("Network error occurred", true);
-            }
-        }
-
-        // Event listeners
-        sendButton.addEventListener('click', sendMessage);
-        input.addEventListener('keypress', (event) => {
-            if (event.key === 'Enter' && !event.shiftKey) {
-                event.preventDefault();
-                sendMessage();
-            }
-        });
-
-        // Handle page visibility changes to reconnect if needed
-        document.addEventListener('visibilitychange', () => {
-            if (!document.hidden && !isConnected) {
-                startStreaming();
-            }
-        });
-
-        // Initialize connection
-        startStreaming();
-         // Mobile-friendly improvements
-        function addMobileEnhancements() {
-            // Add touch-friendly button sizes
-            const buttons = document.querySelectorAll('#tools-modal button');
-            buttons.forEach(button => {
-                button.classList.add('touch-manipulation');
-            });
-
-            // Add swipe to close functionality for mobile
-            let startX = 0;
-            let startY = 0;
-            let isDragging = false;
-
-            requiredElements.toolsModal.addEventListener('touchstart', (e) => {
-                startX = e.touches[0].clientX;
-                startY = e.touches[0].clientY;
-                isDragging = false;
-            });
-
-            requiredElements.toolsModal.addEventListener('touchmove', (e) => {
-                if (!isDragging) {
-                    const deltaX = Math.abs(e.touches[0].clientX - startX);
-                    const deltaY = Math.abs(e.touches[0].clientY - startY);
-                    
-                    if (deltaX > 10 || deltaY > 10) {
-                        isDragging = true;
-                    }
-                }
-            });
-
-            requiredElements.toolsModal.addEventListener('touchend', (e) => {
-                if (isDragging) {
-                    const deltaX = e.changedTouches[0].clientX - startX;
-                    const deltaY = e.changedTouches[0].clientY - startY;
-                    
-                    // Swipe down to close
-                    if (deltaY > 50 && Math.abs(deltaX) < 50) {
-                        hideToolsModal();
-                    }
-                }
-            });
-        }
-
-        // Tools modal functions
         function showToolsModal() {
-            const toolsModal = document.getElementById('tools-modal');
-            if (requiredElements.toolsModal) {
-                requiredElements.toolsModal.classList.remove('hidden');
-                loadTools();
-                addMobileEnhancements();
-            }
+            requiredElements.toolsModal.classList.remove('hidden');
+            loadTools();
         }
 
         function hideToolsModal() {
             requiredElements.toolsModal.classList.add('hidden');
-            // Reset pagination state
             currentPageIndex = 1;
             allTools = [];
-            filteredTools = []; // Clear filtered tools on modal close
+            filteredTools = [];
             requiredElements.clearSearchButton.classList.add('hidden');
-            requiredElements.toolsSearch.value = ''; // Clear search input
+            requiredElements.toolsSearch.value = '';
         }
 
         async function loadTools() {
             try {
-                console.log('🔍 Starting loadTools function...');
-                
-                // Show loading state
                 requiredElements.toolsLoading.classList.remove('hidden');
                 requiredElements.toolsContent.classList.add('hidden');
                 requiredElements.toolsError.classList.add('hidden');
                 
-                // Try simple endpoint first (always works)
-                try {
-                    console.log('🔍 Trying simple tools endpoint first...');
-                    const simpleResponse = await fetch('/tools/simple');
+                const simpleResponse = await fetch('/tools/simple');
+                
+                if (simpleResponse.ok) {
+                    const simpleData = await simpleResponse.json();
                     
-                    if (simpleResponse.ok) {
-                        const simpleData = await simpleResponse.json();
-                        console.log('📡 Simple endpoint response received:', simpleData);
-                        
-                        if (simpleData.tools) {
-                            console.log('✅ Simple endpoint successful, using simple data');
-                            allTools = simpleData.tools;
-                            filteredTools = [...allTools];
-                            currentPageIndex = 1;
-                            console.log(`✅ Loaded ${allTools.length} tools from simple endpoint`);
-                            displayToolsPage();
-                            return;
-                        }
+                    if (simpleData.tools) {
+                        allTools = simpleData.tools;
+                        filteredTools = [...allTools];
+                        currentPageIndex = 1;
+                        displayToolsPage();
+                        return;
                     }
-                } catch (simpleError) {
-                    console.log('⚠️ Simple endpoint failed, trying MCP:', simpleError.message);
                 }
                 
-                // // Try MCP endpoint second
-                // try {
-                //     console.log('🔍 Trying MCP endpoint...');
-                //     const mcpResponse = await fetch('/mcp/tools/list');
-                    
-                //     if (mcpResponse.ok) {
-                //         const mcpData = await mcpResponse.json();
-                //         console.log('📡 MCP response received:', mcpData);
-                        
-                //         if (mcpData.result && mcpData.result.tools) {
-                //             console.log('✅ MCP endpoint successful, using MCP data');
-                //             allTools = mcpData.result.tools;
-                //             filteredTools = [...allTools];
-                //             currentPageIndex = 1;
-                //             console.log(`✅ Loaded ${allTools.length} tools from MCP endpoint`);
-                //             displayToolsPage();
-                //             return;
-                //         }
-                //     }
-                // } catch (mcpError) {
-                //     console.log('⚠️ MCP endpoint failed, trying fallback:', mcpError.message);
-                // }
-                
-                // // Final fallback to /tools endpoint
-                // console.log('🔍 Trying final fallback to /tools endpoint...');
-                // const response = await fetch('/tools');
-                
-                // if (!response.ok) {
-                //     throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-                // }
-                
-                // const data = await simpleData.json();
-                // console.log('📡 Final fallback response received:', data);
-                
-                // if (data.tools) {
-                //     console.log('✅ Using final fallback endpoint data');
-                //     allTools = data.tools;
-                //     filteredTools = [...allTools];
-                //     currentPageIndex = 1;
-                //     console.log(`✅ Loaded ${allTools.length} tools from final fallback endpoint`);
-                //     displayToolsPage();
-                // } else {
-                //     throw new Error('No tools found in any endpoint');
-                // }
+                throw new Error('No tools found');
                 
             } catch (error) {
-                console.error('❌ Error loading tools:', error);
-                console.error('❌ Error details:', {
-                    name: error.name,
-                    message: error.message,
-                    stack: error.stack
-                });
                 showToolsError();
             }
         }
 
+        function showToolsError() {
+            requiredElements.toolsLoading.classList.add('hidden');
+            requiredElements.toolsContent.classList.add('hidden');
+            requiredElements.toolsError.classList.remove('hidden');
+        }
+
         function displayToolsPage() {
-            console.log('🔍 Starting displayToolsPage function...');
-            console.log('🔍 allTools length:', allTools.length);
-            console.log('🔍 filteredTools length:', filteredTools.length);
-            console.log('🔍 currentPageIndex:', currentPageIndex);
-            
             requiredElements.toolsLoading.classList.add('hidden');
             requiredElements.toolsContent.classList.remove('hidden');
             requiredElements.toolsError.classList.add('hidden');
-            
-            console.log('🔍 UI state updated, calculating pagination...');
 
             const startIndex = (currentPageIndex - 1) * toolsPerPage;
             const endIndex = Math.min(startIndex + toolsPerPage, filteredTools.length);
             const currentTools = filteredTools.slice(startIndex, endIndex);
-            
-            console.log('🔍 Pagination calculated:', { startIndex, endIndex, currentToolsLength: currentTools.length });
 
-            // Update pagination info
             requiredElements.currentRange.textContent = filteredTools.length > 0 ? `${startIndex + 1}-${endIndex}` : '0-0';
             requiredElements.totalTools.textContent = filteredTools.length;
             requiredElements.currentPage.textContent = currentPageIndex;
             requiredElements.totalPages.textContent = Math.ceil(filteredTools.length / toolsPerPage);
-            
-            console.log('🔍 Pagination info updated');
 
-            // Update pagination buttons
             requiredElements.prevPageButton.disabled = currentPageIndex === 1;
             requiredElements.nextPageButton.disabled = currentPageIndex >= Math.ceil(filteredTools.length / toolsPerPage);
-            
-            console.log('🔍 Pagination buttons updated');
 
-            // Clear and populate tools list
             requiredElements.toolsList.innerHTML = '';
-            console.log('🔍 Tools list cleared, starting to populate...');
 
             if (filteredTools.length === 0) {
-                console.log('🔍 No tools to display, showing empty state');
                 requiredElements.toolsList.innerHTML = `
                     <div class="text-center py-8">
                         <div class="text-gray-500">
@@ -759,10 +682,7 @@
                 return;
             }
 
-            console.log('🔍 Starting to render tools...');
             currentTools.forEach((tool, index) => {
-                console.log(`🔍 Rendering tool ${index + 1}:`, tool.name);
-                
                 const toolCard = document.createElement('div');
                 toolCard.className = 'bg-gray-50 rounded-lg p-2.5 sm:p-3 md:p-4 border border-gray-200 hover:shadow-md transition-all duration-200';
                 
@@ -793,7 +713,6 @@
                     `;
                 }
 
-                // Add required parameters indicator if any
                 let requiredParamsHtml = '';
                 if (tool.schema && tool.schema.required && tool.schema.required.length > 0) {
                     requiredParamsHtml = `
@@ -835,10 +754,9 @@
                     tool.name.toLowerCase().includes(term) ||
                     tool.description.toLowerCase().includes(term)
                 );
-                clearSearchButton.classList.remove('hidden');
+                requiredElements.clearSearchButton.classList.remove('hidden');
             }
             
-            // Reset to first page when filtering
             currentPageIndex = 1;
             displayToolsPage();
         }
@@ -858,6 +776,57 @@
             goToPage(currentPageIndex - 1);
         }
 
+        // ===== EVENT LISTENERS =====
+        
+        // Chat functionality
+        sendButton.addEventListener('click', sendMessage);
+        input.addEventListener('keypress', (event) => {
+            if (event.key === 'Enter' && !event.shiftKey) {
+                event.preventDefault();
+                sendMessage();
+            }
+        });
+
+        // Scroll detection
+        chatContainer.addEventListener('scroll', function() {
+            isUserScrolling = true;
+            
+            if (scrollTimeout) {
+                clearTimeout(scrollTimeout);
+            }
+            
+            scrollTimeout = setTimeout(() => {
+                isUserScrolling = false;
+            }, 2000);
+            
+            updateScrollButton();
+        });
+
+        // Scroll button
+        scrollToBottomBtn.addEventListener('click', () => {
+            isUserScrolling = false;
+            scrollToBottom();
+            setTimeout(updateScrollButton, 100);
+        });
+
+        // Page visibility
+        document.addEventListener('visibilitychange', () => {
+            if (!document.hidden && !isConnected) {
+                startStreaming();
+            }
+        });
+
+        // ===== INITIALIZATION =====
+        
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', initializeApp);
+        } else {
+            initializeApp();
+        }
+
+        // Start connection
+        startStreaming();
+        updateScrollButton();
         
     </script>
 </body>
