@@ -17,3 +17,8 @@ requests>=2.32.3
 # Performance (explicitly include these since uvicorn[standard] might not work in all environments)
 httptools>=0.5.0
 uvloop>=0.17.0; sys_platform != "win32"
+
+#redis 
+redis==5.0.1
+sentence-transformers==2.2.2
+numpy>=1.26.0

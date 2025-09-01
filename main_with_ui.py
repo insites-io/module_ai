@@ -7,6 +7,7 @@ import os
 import uuid
 import json
 import uvicorn
+# import hashlib
 from dotenv import load_dotenv
 from fastapi import FastAPI, Request, HTTPException, Response
 from fastapi.responses import StreamingResponse, HTMLResponse
@@ -20,6 +21,7 @@ from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 from collections import defaultdict
 from typing import Dict, Any
+# from cache_manager import CacheManager
 
 # --- Load environment variables from .env file ---
 load_dotenv()
@@ -28,7 +30,10 @@ load_dotenv()
 # --- IMPORTANT: These environment variables MUST be set in your Cloud Run service or .env file ---
 GCP_PROJECT_ID = os.getenv("GCP_PROJECT_ID")
 GCP_REGION = os.getenv("GCP_REGION")
-GEMINI_MODEL_NAME = os.getenv("GEMINI_MODEL_NAME", "gemini-1.5-pro")
+GEMINI_MODEL_NAME = os.getenv("GEMINI_MODEL_NAME", "gemini-2.5-flash")
+# REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
+# CACHE_TTL_SECONDS = int(os.getenv("CACHE_TTL_SECONDS", "3600"))
+# ENABLE_CACHING = os.getenv("ENABLE_CACHING", "true").lower() == "true"
 
 # Handle credentials - use local vertex-credentials.json file
 CREDENTIALS_PATH = os.path.join(os.path.dirname(__file__), "vertex-credentials.json")
@@ -57,9 +62,14 @@ message_queues: Dict[str, asyncio.Queue] = defaultdict(asyncio.Queue)
 async def lifespan(app: FastAPI):
     # Startup
     print("🚀 Starting MCP CRM Server with UI...")
-    print(f"📋 Project ID: {GCP_PROJECT_ID}")
-    print(f"🌍 Region: {GCP_REGION}")
-    print(f"🤖 Model: {GEMINI_MODEL_NAME}")
+
+    # # Initialize cache manager
+    # app.state.cache_manager = CacheManager(REDIS_URL, CACHE_TTL_SECONDS)
+    # if ENABLE_CACHING:
+    #     await app.state.cache_manager.initialize()
+    # else:
+    #     print("⚠️ Caching disabled")
+    #     app.state.cache_manager.is_enabled = False
     
     try:
         print("🔧 Initializing LLM and MCP tools...")
@@ -68,7 +78,7 @@ async def lifespan(app: FastAPI):
             project=GCP_PROJECT_ID,
             location=GCP_REGION,
             model_name=GEMINI_MODEL_NAME,
-            temperature=0,
+            temperature=0
         )
 
         # Store the LLM for later use
@@ -784,7 +794,25 @@ async def handle_prompt(request: Request):
                             raise Exception(f"Failed to load MCP tools: {tools_error}")
                         
                         agent = create_react_agent(app.state.llm, tools)
-                        result = await agent.ainvoke({"messages": [HumanMessage(content=prompt)]})
+                        system_prompt = """You are an expert CRM assistant. When presenting data, always provide comprehensive, well-structured responses similar to professional AI assistants.
+
+                            RESPONSE FORMATTING RULES:
+                            1. Use clear headers and bullet points for readability
+                            2. Include ALL relevant details from the data
+                            3. Present information in logical groupings
+                            4. Always include UUIDs for future reference
+                            5. Highlight important relationships (companies, assignments)
+                            6. Use markdown-style formatting for structure
+
+                            For contact data, include:
+                            - Full contact details (name, email, phone, company)
+                            - System information (UUIDs, creation dates)
+                            - Relationships and associations
+                            - Any special notes or alerts
+
+                            Be thorough and professional - users expect detailed, actionable information."""
+                        enhanced_prompt = f"{system_prompt}\n\nUser request: {prompt}"
+                        result = await agent.ainvoke({"messages": [HumanMessage(content=enhanced_prompt)]})
                         response_text = result["messages"][-1].content
                 except Exception as session_error:
                     print(f"DEBUG: MCP session error: {session_error}")
@@ -848,6 +876,22 @@ async def direct_query(request: Request):
     if not instance_api_key:
         raise HTTPException(status_code=400, detail="instance_api_key is required")
 
+    #  # Step 1: Check cache first
+    # cache_manager = app.state.cache_manager
+    # cached_response = await cache_manager.get_cached_response(
+    #     query=request.prompt,
+    #     instance_url=request.instance_url,
+    #     user_context={"api_key_hash": hashlib.sha256(request.instance_api_key.encode()).hexdigest()[:8]}
+    # )
+    
+    # if cached_response:
+    #     return {
+    #         "response": cached_response.get("response", ""),
+    #         "success": True,
+    #         "cached": True,
+    #         "cached_at": cached_response.get("cached_at")
+    #     }
+        
     prompt = body.get("prompt")
     if not prompt:
         raise HTTPException(status_code=400, detail="prompt is required")
@@ -891,6 +935,7 @@ async def direct_query(request: Request):
                     except Exception as tools_error:
                         print(f"DEBUG: Failed to load MCP tools: {tools_error}")
                         raise Exception(f"Failed to load MCP tools: {tools_error}")
+                    
                     
                     # Create agent with tools for this request
                     agent = create_react_agent(app.state.llm, tools)
@@ -976,7 +1021,8 @@ async def sse_generator(session_id: str):
                 print(f"DEBUG: SSE generator yielding chunk: {repr(message)}")
                 # Properly format SSE data - escape newlines and ensure proper formatting
                 # Replace newlines with spaces for SSE compatibility
-                escaped_message = message.replace('\n', ' ')
+                escaped_message = message.replace('\n', '\\n')
+                # escaped_message = message.replace('\n', ' ')
                 yield f"data: {escaped_message}\n\n"
                 # Add a small delay to ensure the chunk is sent
                 await asyncio.sleep(0.01)
