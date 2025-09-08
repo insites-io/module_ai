@@ -123,7 +123,7 @@ def fetch_api_data(endpoint: str) -> Dict[str, Any]:
 def get_contacts() -> Dict[str, Any]:
     """
     Get all contacts from the CRM system.
-    
+    Present results with company names, contact information, and UUIDs.
     Returns:
         Dict[str, Any]: A dictionary containing:
             - success (bool): Whether the operation was successful
