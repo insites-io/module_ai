@@ -143,7 +143,6 @@ dmypy.json
 cython_debug/
 
 # Local development
-local/
 dev/
 development/
 
