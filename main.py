@@ -12,13 +12,18 @@ from langchain_core.messages import HumanMessage
 from langgraph.prebuilt import create_react_agent
 from langchain_google_vertexai import ChatVertexAI
 from collections import defaultdict
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 import httpx
 from pydantic import BaseModel
+import logging
 
-
-# Import CRM tools directly
+# Import tools directly
 from servers.crm_tools import CRMTools
+from servers.instance_tools import InstanceTools
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 # --- Load environment variables from .env file ---
 load_dotenv()
@@ -27,32 +32,20 @@ load_dotenv()
 GCP_PROJECT_ID = os.getenv("GCP_PROJECT_ID")
 GCP_REGION = os.getenv("GCP_REGION") 
 GEMINI_MODEL_NAME = os.getenv("GEMINI_MODEL_NAME", "gemini-2.5-flash")
-# REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
-# CACHE_TTL_SECONDS = int(os.getenv("CACHE_TTL_SECONDS", "3600"))
-# ENABLE_CACHING = os.getenv("ENABLE_CACHING", "true").lower() == "true"
 
 # Handle credentials
 CREDENTIALS_PATH = os.path.join(os.path.dirname(__file__), "vertex-credentials.json")
 if os.path.exists(CREDENTIALS_PATH):
     os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = CREDENTIALS_PATH
-    print(f"Using local credentials from: {CREDENTIALS_PATH}")
+    logger.info(f"Using local credentials from: {CREDENTIALS_PATH}")
 else:
     env_credentials = os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
     if env_credentials:
         os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = env_credentials
-        print(f"Using credentials from environment: {env_credentials}")
+        logger.info(f"Using credentials from environment: {env_credentials}")
     else:
-        print("Using default service account credentials from Cloud Run")
+        logger.info("Using default service account credentials from Cloud Run")
 
-# try:
-#     from cache_manager import CacheManager
-#     CACHING_AVAILABLE = True
-# except ImportError:
-#     print("⚠️ cache_manager.py not found - caching disabled")
-#     CacheManager = None
-#     CACHING_AVAILABLE = False
-
-# Only validate required vars if not in build mode (when they're actually needed)
 def validate_environment():
     """Validate environment variables when actually needed."""
     if not all([GCP_PROJECT_ID, GCP_REGION]):
@@ -61,7 +54,10 @@ def validate_environment():
 # --- Asynchronous Message Queues for Streaming ---
 message_queues: Dict[str, asyncio.Queue] = defaultdict(asyncio.Queue)
 
-# --- Pydantic Models ---
+# ============================================================================
+# PYDANTIC MODELS - MCP STANDARD
+# ============================================================================
+
 class QueryRequest(BaseModel):
     prompt: str
     instance_url: str
@@ -73,78 +69,57 @@ class MessageRequest(BaseModel):
     instance_api_key: str
 
 class ToolsRequest(BaseModel):
+    """MCP standard tools/list request"""
     instance_url: str
     instance_api_key: str
 
-# def get_redis_config():
-#     """Get Redis configuration from environment variables."""
-#     # Option 1: Direct Redis URL
-#     redis_url = os.getenv("REDIS_URL")
-#     if redis_url:
-#         return {"redis_url": redis_url}
-#     return None
+class Tool(BaseModel):
+    name: str
+    description: str
+    inputSchema: Dict[str, Any]
 
-# --- FastAPI App ---
+class ToolsListResponse(BaseModel):
+    tools: List[Tool]
+
+class CallToolRequest(BaseModel):
+    name: str
+    arguments: Optional[Dict[str, Any]] = None
+
+class CallToolResponse(BaseModel):
+    content: List[Dict[str, Any]]
+    isError: Optional[bool] = False
+
+# ============================================================================
+# FASTAPI APP INITIALIZATION
+# ============================================================================
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup
-    print("🚀 Starting MCP CRM Server...")
-    # redis_config = get_redis_config()
-
-    # # Initialize cache manager
-    # if CACHING_AVAILABLE and ENABLE_CACHING:
-    #     try:
-    #         redis_config = get_redis_config() or {"redis_url": REDIS_URL}
-    #         app.state.cache_manager = CacheManager(redis_config, CACHE_TTL_SECONDS)
-    #         await app.state.cache_manager.initialize()
-    #         # Log Redis configuration (without sensitive info)
-    #         if "redis_url" in redis_config:
-    #             # Hide password in URL for logging
-    #             safe_url = redis_config["redis_url"].split('@')[-1] if '@' in redis_config["redis_url"] else redis_config["redis_url"]
-    #             print(f"🔄 Redis URL: {safe_url}")
-    #     except Exception as e:
-    #         print(f"⚠️ Cache initialization failed: {e}")
-    #         app.state.cache_manager = None
-    # else:
-    #     print("⚠️ Caching disabled")
-    #     app.state.cache_manager = None
-    #     if not CACHING_AVAILABLE:
-    #         print("⚠️ Caching not available - cache_manager.py missing")
-    #     else:
-    #         print("⚠️ Caching disabled by configuration")
+    logger.info("🚀 Starting MCP CRM Server...")
     
     # Validate environment at startup (runtime)
     try:
         validate_environment()
     except ValueError as e:
-        print(f"❌ Environment validation failed: {e}")
+        logger.error(f"❌ Environment validation failed: {e}")
         app.state.llm = None
         yield
         return
     
+    # Initialize LLM
     try:
-        print("🔧 Initializing LLM...")
-        # Initialize the LLM
+        logger.info("🔧 Initializing LLM...")
         llm = ChatVertexAI(
             project=GCP_PROJECT_ID,
             location=GCP_REGION,
             model_name=GEMINI_MODEL_NAME,
             temperature=0,
         )
-
-        # Store the LLM for later use
         app.state.llm = llm
-        print("✅ LLM initialized successfully.")
-        
-        # Test the LLM connection
-        try:
-            test_message = await llm.ainvoke("Hello")
-            print("✅ LLM connection test successful")
-        except Exception as test_error:
-            print(f"⚠️ LLM connection test failed: {test_error}")
-            
+        logger.info("✅ LLM initialized successfully")
     except Exception as e:
-        print(f"❌ Error initializing LLM: {e}")
+        logger.error(f"❌ Error initializing LLM: {e}")
         import traceback
         traceback.print_exc()
         app.state.llm = None
@@ -152,29 +127,521 @@ async def lifespan(app: FastAPI):
     yield
     
     # Shutdown
-    print("🛑 Shutting down MCP CRM Server...")
+    logger.info("🛑 Shutting down MCP CRM Server...")
 
 app = FastAPI(
     title="MCP CRM API",
-    description="API for CRM operations using direct tool imports",
-    version="1.0.0",
+    description="API for CRM operations using MCP standard protocol",
+    version="2.0.0",
     lifespan=lifespan
 )
 
-# --- Helper function to create CRM tools ---
+# ============================================================================
+# HELPER FUNCTIONS
+# ============================================================================
+
 def create_crm_tools(instance_url: str, instance_api_key: str):
     """Create CRM tools with the given instance credentials."""
     crm_tools = CRMTools(instance_url, instance_api_key)
     return crm_tools.get_langchain_tools()
 
-# --- Health Check Endpoint ---
+# ============================================================================
+# MCP STANDARD ENDPOINTS
+# ============================================================================
+
+@app.post("/mcp/tools/list")
+async def mcp_list_tools(request: ToolsRequest) -> ToolsListResponse:
+    """
+    MCP standard endpoint: List all available tools.
+    This follows the MCP protocol specification.
+    """
+    try:
+        # Validate the instance credentials
+        crm_tools = CRMTools(request.instance_url, request.instance_api_key)
+        aws_create_instance_url = os.getenv("AWS_CREATE_INSTANCE_URL", "https://3exw0r8y5d.execute-api.ap-southeast-2.amazonaws.com")
+        aws_instance_jwt_secret = os.getenv("AWS_INSTANCE_JWT_SECRET", "")
+        
+        return ToolsListResponse(
+            tools=[
+                # ========== CONTACT TOOLS ==========
+                Tool(
+                    name="get_contacts",
+                    description="Retrieves contacts from the CRM with pagination, sorting, and search. Returns a list of contact objects with id, email, first_name, last_name, and custom properties.",
+                    inputSchema={
+                        "type": "object",
+                        "properties": {
+                            "page": {
+                                "type": "integer",
+                                "description": "Page number for pagination (default: 1)"
+                            },
+                            "size": {
+                                "type": "integer",
+                                "description": "Number of contacts per page (default: 10)"
+                            },
+                            "sort_by": {
+                                "type": "string",
+                                "description": "Field to sort by (e.g., 'last_name', 'first_name', 'email')"
+                            },
+                            "search_by": {
+                                "type": "string",
+                                "description": "Field to search in (e.g., 'first_name', 'last_name', 'email')"
+                            },
+                            "keyword": {
+                                "type": "string",
+                                "description": "Search keyword to filter contacts"
+                            },
+                            "sort_order": {
+                                "type": "string",
+                                "description": "Sort order: 'ASC' or 'DESC' (default: 'ASC')",
+                                "enum": ["ASC", "DESC"]
+                            }
+                        }
+                    }
+                ),
+                Tool(
+                    name="create_contact",
+                    description="Creates a new contact in the Insites CRM. Requires an email address at minimum. Use the 'properties' field to store additional details like phone numbers, job titles, or company names. If email already exists, this will fail - you should then search for the contact and use update_contact instead.",
+                    inputSchema={
+                        "type": "object",
+                        "properties": {
+                            "email": {
+                                "type": "string",
+                                "description": "The email address of the new contact. Must be unique (required)."
+                            },
+                            "first_name": {
+                                "type": "string",
+                                "description": "The contact's first name"
+                            },
+                            "last_name": {
+                                "type": "string",
+                                "description": "The contact's last name"
+                            },
+                        },
+                        "required": ["email"]
+                    }
+                ),
+                Tool(
+                    name="update_contact",
+                    description="Updates the details of an existing contact in the Insites CRM. You must provide the contact's unique 'uuid'. If you only have an email, use 'get_contacts' with search first to retrieve the 'uuid'. Only fields you provide will be updated - others remain unchanged.",
+                    inputSchema={
+                        "type": "object",
+                        "properties": {
+                            "uuid": {
+                                "type": "string",
+                                "description": "The unique UUID of the contact to update (required)"
+                            },
+                            "email": {
+                                "type": "string",
+                                "description": "New email address (optional, only if changing it)"
+                            },
+                            "first_name": {
+                                "type": "string",
+                                "description": "Updated first name (optional)"
+                            },
+                            "last_name": {
+                                "type": "string",
+                                "description": "Updated last name (optional)"
+                            },
+                        },
+                        "required": ["uuid"]
+                    }
+                ),
+
+                # ========== COMPANY TOOLS ==========
+                Tool(
+                    name="get_companies",
+                    description="Retrieves companies from the CRM with pagination, sorting, and search. Returns a list of company objects with uuid, company_name, and other details.",
+                    inputSchema={
+                        "type": "object",
+                        "properties": {
+                            "page": {
+                                "type": "integer",
+                                "description": "Page number for pagination (default: 1)"
+                            },
+                            "size": {
+                                "type": "integer",
+                                "description": "Number of companies per page (default: 10)"
+                            },
+                            "sort_by": {
+                                "type": "string",
+                                "description": "Field to sort by (e.g., 'company_name', 'created_at')"
+                            },
+                            "search_by": {
+                                "type": "string",
+                                "description": "Field to search in (e.g., 'company_name')"
+                            },
+                            "keyword": {
+                                "type": "string",
+                                "description": "Search keyword to filter companies"
+                            },
+                            "sort_order": {
+                                "type": "string",
+                                "description": "Sort order: 'ASC' or 'DESC' (default: 'ASC')",
+                                "enum": ["ASC", "DESC"]
+                            }
+                        }
+                    }
+                ),
+                Tool(
+                    name="create_company",
+                    description="Creates a new company in the Insites CRM. Requires company_name at minimum. Supports comprehensive company data including contact details, social links, tax info, and custom fields.",
+                    inputSchema={
+                        "type": "object",
+                        "properties":{
+                            "company_name":{
+                                "type":"string",
+                                "description":"The name of the company (required)"
+                            },
+                            "registered_business_number":{
+                                "type":"string",
+                                "description":"Official business registration number"
+                            },
+                            "website":{
+                                "type":"string",
+                                "description":"Company website URL"
+                            },
+                            "email_1":{
+                                "type":"string",
+                                "description":"Primary email address"
+                            },
+                            "email_2":{
+                                "type":"string",
+                                "description":"Secondary email address"
+                            },
+                            "email_3":{
+                                "type":"string",
+                                "description":"Tertiary email address"
+                            },
+                            "phone_1_country_code":{
+                                "type":"string",
+                                "description":"Country code for primary phone (e.g., '1' for US)"
+                            },
+                            "phone_1_number":{
+                                "type":"string",
+                                "description":"Primary phone number"
+                            },
+                            "phone_2_country_code":{
+                                "type":"string",
+                                "description":"Country code for secondary phone"
+                            },
+                            "phone_2_number":{
+                                "type":"string",
+                                "description":"Secondary phone number"
+                            },
+                            "phone_3_country_code":{
+                                "type":"string",
+                                "description":"Country code for tertiary phone"
+                            },
+                            "phone_3_number":{
+                                "type":"string",
+                                "description":"Tertiary phone number"
+                            },
+                            "mobile_phone_country_code":{
+                                "type":"string",
+                                "description":"Country code for mobile phone"
+                            },
+                            "mobile_phone_number":{
+                                "type":"string",
+                                "description":"Mobile phone number"
+                            }
+                        },
+                        "required": ["company_name"],
+                        "additionalProperties": True
+                    }
+                ),
+                Tool(
+                    name="update_company",
+                    description="Updates an existing company in the Insites CRM. You must provide the company's unique 'uuid'. Only fields you provide will be updated - others remain unchanged.",
+                    inputSchema={
+                        "type": "object",
+                        "properties":{
+                            "uuid":{
+                                "type":"string",
+                                "description":"The unique UUID of the company to update (required)"
+                            },
+                            "company_name":{
+                                "type":"string",
+                                "description":"Updated company name"
+                            },
+                            "registered_business_number":{
+                                "type":"string",
+                                "description":"Updated business registration number"
+                            },
+                            "website":{
+                                "type":"string",
+                                "description":"Updated website URL"
+                            },
+                            "email_1":{
+                                "type":"string",
+                                "description":"Updated primary email"
+                            },
+                            "email_2":{
+                                "type":"string",
+                                "description":"Updated secondary email"
+                            },
+                            "email_3":{
+                                "type":"string",
+                                "description":"Updated tertiary email"
+                            },
+                            "phone_1_country_code":{
+                                "type":"string",
+                                "description":"Updated country code for primary phone"
+                            },
+                            "phone_1_number":{
+                                "type":"string",
+                                "description":"Updated primary phone number"
+                            },
+                            "phone_2_country_code":{
+                                "type":"string",
+                                "description":"Updated country code for secondary phone"
+                            },
+                            "phone_2_number":{
+                                "type":"string",
+                                "description":"Updated secondary phone number"
+                            },
+                            "phone_3_country_code":{
+                                "type":"string",
+                                "description":"Updated country code for tertiary phone"
+                            },
+                            "phone_3_number":{
+                                "type":"string",
+                                "description":"Updated tertiary phone number"
+                            },
+                            "mobile_phone_country_code":{
+                                "type":"string",
+                                "description":"Updated mobile country code"
+                            },
+                            "mobile_phone_number":{
+                                "type":"string",
+                                "description":"Updated mobile phone number"
+                            }
+                        },
+                        "required": ["uuid"],
+                        "additionalProperties": True
+                    }
+                ),
+                
+                # # ========== OTHER TOOLS ==========
+                # Tool(
+                #     name="get_contact_relationships",
+                #     description="Get contact relationships from the CRM system",
+                #     inputSchema={"type": "object", "properties": {}}
+                # ),
+                # Tool(
+                #     name="get_contact_addresses",
+                #     description="Get contact addresses from the CRM system",
+                #     inputSchema={"type": "object", "properties": {}}
+                # ),
+                # Tool(
+                #     name="get_company_relationships",
+                #     description="Get company relationships from the CRM system",
+                #     inputSchema={"type": "object", "properties": {}}
+                # ),
+                # Tool(
+                #     name="get_company_addresses",
+                #     description="Get company addresses from the CRM system",
+                #     inputSchema={"type": "object", "properties": {}}
+                # ),
+                # Tool(
+                #     name="get_system_fields",
+                #     description="Get system fields from the CRM system",
+                #     inputSchema={"type": "object", "properties": {}}
+                # ),
+                # Tool(
+                #     name="get_contact_system_fields",
+                #     description="Get contact custom fields from the CRM system",
+                #     inputSchema={"type": "object", "properties": {}}
+                # ),
+                # Tool(
+                #     name="get_company_system_fields",
+                #     description="Get company custom fields from the CRM system",
+                #     inputSchema={"type": "object", "properties": {}}
+                # )
+                # ========== INSTANCE MANAGEMENT TOOLS ==========
+                Tool(
+                    name="validate_subdomain",
+                    description="Validate if a subdomain is available for a new PlatformOS instance before creating it.",
+                    inputSchema={
+                        "type": "object",
+                        "properties": {
+                            "subdomain": {
+                                "type": "string",
+                                "description": "The subdomain to check (e.g., 'my-new-site')"
+                            }
+                        },
+                        "required": ["subdomain"]
+                    }
+                ),
+                Tool(
+                    name="create_instance",
+                    description="Create a new PlatformOS instance. This tool automatically validates subdomain availability before creating the instance. Requires subdomain, pos_billing_plan_id, and pos_data_centre_id.",
+                    inputSchema={
+                        "type": "object",
+                        "properties": {
+                            "subdomain": {
+                                "type": "string",
+                                "description": "The subdomain for the new instance (required)"
+                            },
+                            "pos_billing_plan_id": {
+                                "type": "string",
+                                "description": "POS billing plan ID (required)"
+                            },
+                            "pos_data_centre_id": {
+                                "type": "string",
+                                "description": "POS data centre ID (required)"
+                            },
+                            "tags": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                                "description": "List of tags for the instance (optional)"
+                            },
+                            "created_by": {
+                                "type": "string",
+                                "description": "Email or ID of user creating the instance (optional)"
+                            },
+                            "is_duplication": {
+                                "type": "boolean",
+                                "description": "Whether this is a duplication (default: false)"
+                            },
+                            "environment": {
+                                "type": "string",
+                                "description": "Environment: 'staging' or 'production' (default: 'production')",
+                                "enum": ["staging", "production"]
+                            }
+                        },
+                        "required": ["subdomain", "pos_billing_plan_id", "pos_data_centre_id"]
+                    }
+                ),
+            ]
+        )
+    except Exception as e:
+        logger.error(f"Error listing tools: {e}")
+        raise HTTPException(status_code=400, detail=f"Invalid instance credentials: {str(e)}")
+
+@app.post("/mcp/tools/call")
+async def mcp_call_tool(request: CallToolRequest, instance_url: Optional[str] = None, instance_api_key: Optional[str] = None) -> CallToolResponse:
+    """
+    MCP standard endpoint: Execute a tool with given arguments.
+    Note: instance_url and instance_api_key are required for CRM tools, optional for instance management tools
+    """
+    try:        
+        # Route to appropriate tool handler based on tool name
+        tool_name = request.name
+        args = request.arguments or {}
+        # CRM Tools
+        if tool_name in ["get_contacts", "create_contact", "update_contact", 
+                         "get_companies", "create_company", "update_company"]:
+            if not instance_url or not instance_api_key:
+                return CallToolResponse(
+                    content=[{
+                        "type": "text",
+                        "text": "instance_url and instance_api_key query parameters are required for CRM tools"
+                    }],
+                    isError=True
+                )
+            crm = CRMTools(instance_url, instance_api_key)
+            # ... existing CRM tool handlers ...
+        
+            # Execute the appropriate method
+            if tool_name == "get_contacts":
+                result = crm.get_contacts(args)
+            # elif tool_name == "get_contact_relationships":
+            #     result = crm.get_contact_relationships()
+            # elif tool_name == "get_contact_addresses":
+            #     result = crm.get_contact_addresses()
+            elif tool_name == "get_companies":
+                result = crm.get_companies(args)
+            # elif tool_name == "get_company_relationships":
+            #     result = crm.get_company_relationships()
+            # elif tool_name == "get_company_addresses":
+            #     result = crm.get_company_addresses()
+            # elif tool_name == "get_system_fields":
+            #     result = crm.get_system_fields()
+            # elif tool_name == "get_contact_system_fields":
+            #     result = crm.get_contact_system_fields()
+            # elif tool_name == "get_company_system_fields":
+            #     result = crm.get_company_system_fields()
+            # elif tool_name == "save_contact":
+            #     result = crm.save_contact(args.get("contact_data", {}))
+            elif tool_name == "create_contact":
+                result = crm.save_contact(args)  # Create is same as save without uuid
+            elif tool_name == "update_contact":
+                result = crm.save_contact(args)  # Update is save with uuid
+            elif tool_name == "create_company":
+                result = crm.create_company(args) 
+            elif tool_name == "update_company":
+                result = crm.update_company(args) 
+            else:
+                return CallToolResponse(
+                    content=[{
+                        "type": "text",
+                        "text": f"Unknown tool: {tool_name}"
+                    }],
+                    isError=True
+                )
+        # Instance Management Tools
+        elif tool_name in ["validate_subdomain", "create_instance"]:
+            # Try to get AWS credentials from request arguments first, then environment variables
+            aws_create_instance_url = args.pop("aws_create_instance_url", None) or os.getenv("AWS_CREATE_INSTANCE_URL")
+            aws_instance_jwt_secret = args.pop("aws_instance_jwt_secret", None) or os.getenv("AWS_INSTANCE_JWT_SECRET")
+            
+            if not aws_create_instance_url or not aws_instance_jwt_secret:
+                return CallToolResponse(
+                    content=[{
+                        "type": "text",
+                        "text": "AWS API Gateway URL and JWT secret not configured. Please provide aws_create_instance_url and aws_instance_jwt_secret in the tool arguments or set AWS_CREATE_INSTANCE_URL and AWS_INSTANCE_JWT_SECRET environment variables."
+                    }],
+                    isError=True
+                )
+            
+            instance_tools = InstanceTools(aws_create_instance_url, aws_instance_jwt_secret)
+            
+            if tool_name == "validate_subdomain":
+                result = instance_tools.validate_subdomain(args.get("subdomain", ""))
+            elif tool_name == "create_instance":
+                environment = args.pop("environment", "production")
+                result = instance_tools.create_instance(args, environment)
+        
+        else:
+            return CallToolResponse(
+                content=[{"type": "text", "text": f"Unknown tool: {tool_name}"}],
+                isError=True
+            )
+        
+        # Check if result indicates an error
+        is_error = not result.get("success", True)
+        
+        return CallToolResponse(
+            content=[{
+                "type": "text",
+                "text": json.dumps(result, indent=2)
+            }],
+            isError=is_error
+        )
+        
+    except Exception as e:
+        logger.error(f"Error executing tool '{request.name}': {e}")
+        import traceback
+        error_detail = f"Error executing tool '{request.name}': {str(e)}\n{traceback.format_exc()}"
+        return CallToolResponse(
+            content=[{
+                "type": "text",
+                "text": error_detail
+            }],
+            isError=True
+        )
+
+# ============================================================================
+# LEGACY ENDPOINTS (for backward compatibility)
+# ============================================================================
+
 @app.get("/")
 async def health_check():
     """Health check endpoint for the API service."""
     return {
         "status": "healthy",
         "service": "MCP CRM API",
-        "version": "1.0.0",
+        "version": "2.0.0",
         "message": "Server is running and ready",
         "config": {
             "project_id": GCP_PROJECT_ID or "not set",
@@ -188,7 +655,6 @@ async def health_check_simple():
     """Simple health check that responds immediately."""
     return {"status": "ok"}
 
-# --- API Documentation ---
 @app.get("/docs")
 async def api_docs():
     """API documentation and usage examples."""
@@ -196,121 +662,40 @@ async def api_docs():
         "endpoints": {
             "GET /": "Health check",
             "GET /docs": "This API documentation",
-            "POST /tools": "List all available CRM tools",
+            "POST /mcp/tools/list": "List all available CRM tools (MCP standard)",
+            "POST /mcp/tools/call": "Execute a CRM tool (MCP standard)",
+            "POST /tools": "List tools (legacy)",
             "POST /messages": "Send a prompt to the CRM agent (with SSE streaming)",
             "POST /query": "Direct query endpoint (synchronous response)",
             "GET /sse": "Server-Sent Events stream for real-time responses"
         },
-        "usage": {
-            "POST /messages": {
-                "url": "/messages?session_id={session_id}",
+        "mcp_standard": {
+            "POST /mcp/tools/list": {
+                "description": "MCP standard endpoint to list available tools",
                 "body": {
-                    "prompt": "Your CRM query here",
                     "instance_url": "Your CRM instance URL",
                     "instance_api_key": "Your CRM instance API key"
-                },
-                "example": "Get me all contacts",
-                "note": "Use with SSE endpoint for streaming responses"
+                }
             },
-            "POST /query": {
-                "url": "/query",
-                "body": {
-                    "prompt": "Your CRM query here",
+            "POST /mcp/tools/call": {
+                "description": "MCP standard endpoint to execute a tool",
+                "query_params": {
                     "instance_url": "Your CRM instance URL",
                     "instance_api_key": "Your CRM instance API key"
                 },
-                "example": "Get me all contacts",
-                "note": "Direct response, no streaming required"
-            },
-            "POST /tools": {
-                "url": "/tools",
                 "body": {
-                    "instance_url": "Your CRM instance URL",
-                    "instance_api_key": "Your CRM instance API key"
-                },
-                "note": "Returns list of available tools for the instance"
+                    "name": "Tool name to execute",
+                    "arguments": {"key": "value"}
+                }
             }
-        },
-        "parameters": {
-            "session_id": "Unique identifier for the conversation session",
-            "instance_url": "Your CRM instance URL",
-            "instance_api_key": "Your CRM instance API key"
         }
     }
 
-# --- Tools Listing Endpoint (now accepts body with credentials) ---
+# Legacy /tools endpoint for backward compatibility
 @app.post("/tools")
 async def list_tools(request: ToolsRequest):
-    """List all available CRM tools for the given instance."""
-    try:
-        # Validate the instance credentials by trying to create tools
-        crm_tools = CRMTools(request.instance_url, request.instance_api_key)
-        
-        return {
-            "tools": [
-                {
-                    "name": "get_contacts",
-                    "description": "Get all contacts from the CRM module",
-                    "inputSchema": {"type": "object", "properties": {}}
-                },
-                {
-                    "name": "get_contact_relationships", 
-                    "description": "Get contact relationships from the CRM module",
-                    "inputSchema": {"type": "object", "properties": {}}
-                },
-                {
-                    "name": "get_contact_addresses",
-                    "description": "Get contact addresses from the CRM module",
-                    "inputSchema": {"type": "object", "properties": {}}
-                },
-                {
-                    "name": "get_companies",
-                    "description": "Get all companies from the CRM module",
-                    "inputSchema": {"type": "object", "properties": {}}
-                },
-                {
-                    "name": "get_company_relationships",
-                    "description": "Get company relationships from the CRM module",
-                    "inputSchema": {"type": "object", "properties": {}}
-                },
-                {
-                    "name": "get_company_addresses",
-                    "description": "Get company addresses from the CRM module",
-                    "inputSchema": {"type": "object", "properties": {}}
-                },
-                {
-                    "name": "get_system_fields",
-                    "description": "Get system fields from the CRM system",
-                    "inputSchema": {"type": "object", "properties": {}}
-                },
-                {
-                    "name": "get_contact_system_fields",
-                    "description": "Get contact custom fields from the CRM system",
-                    "inputSchema": {"type": "object", "properties": {}}
-                },
-                {
-                    "name": "get_company_system_fields",
-                    "description": "Get company custom fields from the CRM system",
-                    "inputSchema": {"type": "object", "properties": {}}
-                },
-                {
-                    "name": "save_contact",
-                    "description": "Save or update a contact in the CRM system",
-                    "inputSchema": {
-                        "type": "object",
-                        "properties": {
-                            "contact_data": {
-                                "type": "object",
-                                "description": "Contact data to save"
-                            }
-                        },
-                        "required": ["contact_data"]
-                    }
-                }
-            ]
-        }
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Invalid instance credentials: {str(e)}")
+    """Legacy endpoint - redirects to MCP standard."""
+    return await mcp_list_tools(request)
 
 @app.post("/query")
 async def query_endpoint(request: QueryRequest):
@@ -320,30 +705,6 @@ async def query_endpoint(request: QueryRequest):
         raise HTTPException(status_code=500, detail="LLM not initialized")
     
     try:
-        # # Step 1: Check cache first (if available)
-        # cache_manager = app.state.cache_manager
-        # cached_response = None
-        
-        # if cache_manager is not None:
-        #     try:
-        #         cached_response = await cache_manager.get_cached_response(
-        #             query=request.prompt,
-        #             instance_url=request.instance_url,
-        #             user_context={"api_key_hash": hashlib.sha256(request.instance_api_key.encode()).hexdigest()[:8]}
-        #         )
-        #     except Exception as cache_error:
-        #         print(f"Cache error: {cache_error}")
-        #         cached_response = None
-        
-        # if cached_response:
-        #     return {
-        #         "response": cached_response.get("response", ""),
-        #         "success": True,
-        #         "cached": True,
-        #         "cached_at": cached_response.get("cached_at")
-        #     }
-        
-        # Step 2: Process with AI if not cached
         # Create CRM tools with the provided credentials
         tools = create_crm_tools(request.instance_url, request.instance_api_key)
         
@@ -358,28 +719,13 @@ async def query_endpoint(request: QueryRequest):
         # Extract the response
         response_content = result["messages"][-1].content if result.get("messages") else "No response generated"
         
-        # # Step 3: Cache the response for future use (if cache is available)
-        # if cache_manager is not None:
-        #     try:
-        #         await cache_manager.cache_response(
-        #             query=request.prompt,
-        #             response=response_content,
-        #             instance_url=request.instance_url,
-        #             user_context={"api_key_hash": hashlib.sha256(request.instance_api_key.encode()).hexdigest()[:8]},
-        #             metadata={"model": GEMINI_MODEL_NAME, "endpoint": "query"}
-        #         )
-        #     except Exception as cache_error:
-        #         print(f"Cache storage error: {cache_error}")
-        
         return {
             "response": response_content,
-            "success": True,
-            # "cached": False
+            "success": True
         }
-
         
     except Exception as e:
-        print(f"Error in query endpoint: {e}")
+        logger.error(f"Error in query endpoint: {e}")
         import traceback
         traceback.print_exc()
         return {
@@ -388,10 +734,7 @@ async def query_endpoint(request: QueryRequest):
         }
 
 @app.post("/messages")
-async def messages_endpoint(
-    request: MessageRequest,
-    session_id: str
-):
+async def messages_endpoint(request: MessageRequest, session_id: str):
     """Send a prompt to the CRM agent (with SSE streaming)."""
     
     if not app.state.llm:
@@ -408,7 +751,7 @@ async def messages_endpoint(
         if session_id not in message_queues:
             message_queues[session_id] = asyncio.Queue()
         
-        # Process the query asynchronously and put result in queue
+        # Process the query asynchronously
         async def process_query():
             try:
                 result = await agent_executor.ainvoke({
@@ -423,7 +766,6 @@ async def messages_endpoint(
                     "session_id": session_id
                 })
                 
-                # Signal end of stream
                 await message_queues[session_id].put({"type": "end"})
                 
             except Exception as e:
@@ -433,13 +775,12 @@ async def messages_endpoint(
                     "session_id": session_id
                 })
         
-        # Start processing in background
         asyncio.create_task(process_query())
         
         return {"status": "processing", "session_id": session_id}
         
     except Exception as e:
-        print(f"Error in messages endpoint: {e}")
+        logger.error(f"Error in messages endpoint: {e}")
         import traceback
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Message processing failed: {str(e)}")
@@ -458,7 +799,6 @@ async def sse_endpoint(session_id: str):
             
             while True:
                 try:
-                    # Wait for message with timeout
                     message = await asyncio.wait_for(queue.get(), timeout=30.0)
                     
                     if message["type"] == "end":
@@ -467,13 +807,11 @@ async def sse_endpoint(session_id: str):
                     yield f"data: {json.dumps(message)}\n\n"
                     
                 except asyncio.TimeoutError:
-                    # Send keep-alive
                     yield f"data: {json.dumps({'type': 'ping'})}\n\n"
                     
         except Exception as e:
             yield f"data: {json.dumps({'error': str(e)})}\n\n"
         finally:
-            # Clean up the queue
             if session_id in message_queues:
                 del message_queues[session_id]
     
@@ -487,35 +825,6 @@ async def sse_endpoint(session_id: str):
             "Access-Control-Allow-Headers": "*",
         }
     )
-
-# @app.get("/cache/stats")
-# async def cache_stats():
-#     """Get cache statistics and performance metrics."""
-#     if not hasattr(app.state, 'cache_manager'):
-#         return {"error": "Cache manager not initialized"}
-    
-#     stats = await app.state.cache_manager.get_cache_stats()
-#     return {
-#         "cache_stats": stats,
-#         "config": {
-#             "enabled": ENABLE_CACHING,
-#             "ttl_seconds": CACHE_TTL_SECONDS,
-#             "redis_url": REDIS_URL.split('@')[-1] if '@' in REDIS_URL else REDIS_URL  # Hide credentials
-#         }
-#     }
-
-# @app.post("/cache/clear")
-# async def clear_cache():
-#     """Clear all cached responses."""
-#     if not hasattr(app.state, 'cache_manager'):
-#         return {"error": "Cache manager not initialized"}
-    
-#     deleted_count = await app.state.cache_manager.clear_cache()
-#     return {
-#         "success": True,
-#         "deleted_keys": deleted_count,
-#         "message": f"Cleared {deleted_count} cached responses"
-#     }
 
 if __name__ == "__main__":
     import uvicorn

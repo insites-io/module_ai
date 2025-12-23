@@ -813,7 +813,12 @@ async def handle_prompt(request: Request):
                             Be thorough and professional - users expect detailed, actionable information."""
                         enhanced_prompt = f"{system_prompt}\n\nUser request: {prompt}"
                         result = await agent.ainvoke({"messages": [HumanMessage(content=enhanced_prompt)]})
-                        response_text = result["messages"][-1].content
+                        content = result["messages"][-1].content
+                        # Convert content to string if it's a list (can happen with multimodal models)
+                        if isinstance(content, list):
+                            response_text = ' '.join(str(item) for item in content)
+                        else:
+                            response_text = str(content) if content else ""
                 except Exception as session_error:
                     print(f"DEBUG: MCP session error: {session_error}")
                     raise session_error
@@ -944,7 +949,12 @@ async def direct_query(request: Request):
                     result = await agent.ainvoke(
                         {"messages": [HumanMessage(content=prompt)]}
                     )
-                    response_text = result["messages"][-1].content
+                    content = result["messages"][-1].content
+                    # Convert content to string if it's a list (can happen with multimodal models)
+                    if isinstance(content, list):
+                        response_text = ' '.join(str(item) for item in content)
+                    else:
+                        response_text = str(content) if content else ""
                     
                     return {
                         "success": True,
@@ -1021,6 +1031,11 @@ async def sse_generator(session_id: str):
                 print(f"DEBUG: SSE generator yielding chunk: {repr(message)}")
                 # Properly format SSE data - escape newlines and ensure proper formatting
                 # Replace newlines with spaces for SSE compatibility
+                # Convert message to string if it's a list or other type
+                if isinstance(message, list):
+                    message = ' '.join(str(item) for item in message)
+                elif not isinstance(message, str):
+                    message = str(message)
                 escaped_message = message.replace('\n', '\\n')
                 # escaped_message = message.replace('\n', ' ')
                 yield f"data: {escaped_message}\n\n"
