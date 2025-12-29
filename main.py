@@ -33,6 +33,16 @@ GCP_PROJECT_ID = os.getenv("GCP_PROJECT_ID")
 GCP_REGION = os.getenv("GCP_REGION") 
 GEMINI_MODEL_NAME = os.getenv("GEMINI_MODEL_NAME", "gemini-2.5-flash")
 
+
+AWS_CREATE_INSTANCE_URL = os.getenv("AWS_CREATE_INSTANCE_URL", "https://3exw0r8y5d.execute-api.ap-southeast-2.amazonaws.com")
+AWS_INSTANCE_JWT_SECRET = os.getenv("AWS_INSTANCE_JWT_SECRET", "")
+
+# Console API Configuration
+CONSOLE_BASE_URL = os.getenv("CONSOLE_BASE_URL", "https://console.insites.io")
+CONSOLE_CSRF_TOKEN = os.getenv("CONSOLE_CSRF_TOKEN", "")  # Optional if username/password provided
+CONSOLE_USERNAME = os.getenv("CONSOLE_USERNAME", "")  # For automatic CSRF token retrieval
+CONSOLE_PASSWORD = os.getenv("CONSOLE_PASSWORD", "")  # For automatic CSRF token retrieval
+
 # Handle credentials
 CREDENTIALS_PATH = os.path.join(os.path.dirname(__file__), "vertex-credentials.json")
 if os.path.exists(CREDENTIALS_PATH):
@@ -158,8 +168,8 @@ async def mcp_list_tools(request: ToolsRequest) -> ToolsListResponse:
     try:
         # Validate the instance credentials
         crm_tools = CRMTools(request.instance_url, request.instance_api_key)
-        aws_create_instance_url = os.getenv("AWS_CREATE_INSTANCE_URL", "https://3exw0r8y5d.execute-api.ap-southeast-2.amazonaws.com")
-        aws_instance_jwt_secret = os.getenv("AWS_INSTANCE_JWT_SECRET", "")
+        aws_create_instance_url = AWS_CREATE_INSTANCE_URL
+        aws_instance_jwt_secret = AWS_INSTANCE_JWT_SECRET
         
         return ToolsListResponse(
             tools=[
@@ -472,46 +482,68 @@ async def mcp_list_tools(request: ToolsRequest) -> ToolsListResponse:
                         "required": ["subdomain"]
                     }
                 ),
+                # Tool(
+                #     name="create_instance",
+                #     description="Create a new PlatformOS instance. This tool automatically validates subdomain availability before creating the instance. Requires subdomain, pos_billing_plan_id, and pos_data_centre_id.",
+                #     inputSchema={
+                #         "type": "object",
+                #         "properties": {
+                #             "subdomain": {
+                #                 "type": "string",
+                #                 "description": "The subdomain for the new instance (required)"
+                #             },
+                #             "pos_billing_plan_id": {
+                #                 "type": "string",
+                #                 "description": "POS billing plan ID (required)"
+                #             },
+                #             "pos_data_centre_id": {
+                #                 "type": "string",
+                #                 "description": "POS data centre ID (required)"
+                #             },
+                #             "tags": {
+                #                 "type": "array",
+                #                 "items": {"type": "string"},
+                #                 "description": "List of tags for the instance (optional)"
+                #             },
+                #             "created_by": {
+                #                 "type": "string",
+                #                 "description": "Email or ID of user creating the instance (optional)"
+                #             },
+                #             "is_duplication": {
+                #                 "type": "boolean",
+                #                 "description": "Whether this is a duplication (default: false)"
+                #             },
+                #             "environment": {
+                #                 "type": "string",
+                #                 "description": "Environment: 'staging' or 'production' (default: 'production')",
+                #                 "enum": ["staging", "production"]
+                #             }
+                #         },
+                #         "required": ["subdomain", "pos_billing_plan_id", "pos_data_centre_id"]
+                #     }
+                # ),
                 Tool(
                     name="create_instance",
-                    description="Create a new PlatformOS instance. This tool automatically validates subdomain availability before creating the instance. Requires subdomain, pos_billing_plan_id, and pos_data_centre_id.",
+                    description="Complete instance creation workflow (RECOMMENDED). 3-step process: 1) Check subdomain, 2) Save to database via Console API (CRUCIAL), 3) Update via AWS Gateway. Ensures database record exists.",
                     inputSchema={
                         "type": "object",
                         "properties": {
-                            "subdomain": {
-                                "type": "string",
-                                "description": "The subdomain for the new instance (required)"
-                            },
-                            "pos_billing_plan_id": {
-                                "type": "string",
-                                "description": "POS billing plan ID (required)"
-                            },
-                            "pos_data_centre_id": {
-                                "type": "string",
-                                "description": "POS data centre ID (required)"
-                            },
-                            "tags": {
-                                "type": "array",
-                                "items": {"type": "string"},
-                                "description": "List of tags for the instance (optional)"
-                            },
-                            "created_by": {
-                                "type": "string",
-                                "description": "Email or ID of user creating the instance (optional)"
-                            },
-                            "is_duplication": {
-                                "type": "boolean",
-                                "description": "Whether this is a duplication (default: false)"
-                            },
-                            "environment": {
-                                "type": "string",
-                                "description": "Environment: 'staging' or 'production' (default: 'production')",
-                                "enum": ["staging", "production"]
-                            }
+                            "name": {"type": "string", "description": "Instance name (required)"},
+                            "subdomain": {"type": "string", "description": "Instance subdomain (required)"},
+                            "environment": {"type": "string", "description": "'Staging' or 'Production'", "enum": ["Staging", "Production"]},
+                            "instance_data_centre": {"type": "string", "description": "Data centre ID for Console API (required)"},
+                            "instance_billing_plan": {"type": "string", "description": "Billing plan ID for Console API (required)"},
+                            "pos_billing_plan_id": {"type": "string", "description": "POS billing plan ID for AWS Gateway (required)"},
+                            "pos_data_centre_id": {"type": "string", "description": "POS data centre ID for AWS Gateway (required)"},
+                            "tags": {"type": "array", "items": {"type": "string"}},
+                            "created_by": {"type": "string"},
+                            "pay_on_invoice": {"type": "boolean"},
+                            "is_duplication": {"type": "boolean"}
                         },
-                        "required": ["subdomain", "pos_billing_plan_id", "pos_data_centre_id"]
+                        "required": ["name", "subdomain", "environment", "instance_data_centre", 
+                                    "instance_billing_plan", "pos_billing_plan_id", "pos_data_centre_id"]
                     }
-                ),
+                )
             ]
         )
     except Exception as e:
@@ -580,28 +612,64 @@ async def mcp_call_tool(request: CallToolRequest, instance_url: Optional[str] = 
                     isError=True
                 )
         # Instance Management Tools
-        elif tool_name in ["validate_subdomain", "create_instance"]:
-            # Try to get AWS credentials from request arguments first, then environment variables
+        elif tool_name in ["validate_subdomain", "create_instance", "create_instance_complete_workflow"]:
+            # Get AWS credentials
             aws_create_instance_url = args.pop("aws_create_instance_url", None) or os.getenv("AWS_CREATE_INSTANCE_URL")
             aws_instance_jwt_secret = args.pop("aws_instance_jwt_secret", None) or os.getenv("AWS_INSTANCE_JWT_SECRET")
+            
+            # Get Console credentials (supports both manual token and automatic login)
+            console_base_url = args.pop("console_base_url", None) or os.getenv("CONSOLE_BASE_URL", "")
+            console_csrf_token = args.pop("console_csrf_token", None) or os.getenv("CONSOLE_CSRF_TOKEN", "")
+            console_username = args.pop("console_username", None) or os.getenv("CONSOLE_USERNAME", "")
+            console_password = args.pop("console_password", None) or os.getenv("CONSOLE_PASSWORD", "")
             
             if not aws_create_instance_url or not aws_instance_jwt_secret:
                 return CallToolResponse(
                     content=[{
                         "type": "text",
-                        "text": "AWS API Gateway URL and JWT secret not configured. Please provide aws_create_instance_url and aws_instance_jwt_secret in the tool arguments or set AWS_CREATE_INSTANCE_URL and AWS_INSTANCE_JWT_SECRET environment variables."
+                        "text": "AWS credentials not configured. Set AWS_CREATE_INSTANCE_URL and AWS_INSTANCE_JWT_SECRET."
                     }],
                     isError=True
                 )
             
-            instance_tools = InstanceTools(aws_create_instance_url, aws_instance_jwt_secret)
+            # Initialize instance tools with automatic CSRF token support
+            instance_tools = InstanceTools(
+                aws_create_instance_url=aws_create_instance_url,
+                aws_instance_jwt_secret=aws_instance_jwt_secret,
+                console_base_url=console_base_url,
+                console_csrf_token=console_csrf_token,
+                console_username=console_username,
+                console_password=console_password
+            )
             
+            # Execute instance tool
             if tool_name == "validate_subdomain":
                 result = instance_tools.validate_subdomain(args.get("subdomain", ""))
+            
+            # elif tool_name == "create_instance":
+            #     environment = args.pop("environment", "production")
+            #     result = instance_tools.create_instance(args, environment)
+            
             elif tool_name == "create_instance":
-                environment = args.pop("environment", "production")
-                result = instance_tools.create_instance(args, environment)
-        
+                result = instance_tools.create_instance_complete_workflow(
+                    name=args.get("name"),
+                    subdomain=args.get("subdomain"),
+                    environment=args.get("environment"),
+                    instance_data_centre=args.get("instance_data_centre", "571"),
+                    instance_billing_plan=args.get("instance_billing_plan", "127"),
+                    pos_billing_plan_id=args.get("pos_billing_plan_id", "246"),
+                    pos_data_centre_id=args.get("pos_data_centre_id", "8"),
+                    tags=args.get("tags"),
+                    created_by=args.get("created_by", "enrique@insites.io"),
+                    pay_on_invoice=args.get("pay_on_invoice", False),
+                    domain_ids=args.get("domain_ids"),
+                    image=args.get("image"),
+                    is_duplication=args.get("is_duplication", False),
+                    request_full_url=args.get("request_full_url", "console-uat.staging.oregon.platform-os.com"),
+                    request_ip=args.get("request_ip", ""),
+                    request_user_id=args.get("request_user_id", "54"),
+                    partner_id=args.get("partner_id", "11")
+                )
         else:
             return CallToolResponse(
                 content=[{"type": "text", "text": f"Unknown tool: {tool_name}"}],
