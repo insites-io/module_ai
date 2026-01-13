@@ -1,7 +1,8 @@
 # Core MCP dependencies
 mcp>=1.0.0
+langchain>=1.0.0
 langchain-mcp-adapters>=0.1.9
-langchain-google-vertexai>=0.1.0
+langchain-google-genai>=1.0.0
 langgraph>=0.0.30
 
 # Web framework
@@ -26,4 +27,5 @@ numpy>=1.26.0
 # Instance management dependencies
 PyJWT>=2.8.0
 pycryptodome>=3.19.0
-beautifulsoup4>=4.12.0
+
+google-cloud-secret-manager>=2.16.0

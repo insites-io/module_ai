@@ -39,12 +39,14 @@ COPY --from=builder /usr/local/bin /usr/local/bin
 # Copy application code with proper ownership
 COPY --chown=appuser:appuser main.py .
 COPY --chown=appuser:appuser servers/ ./servers/
+COPY --chown=appuser:appuser utils/ ./utils/
 COPY --chown=appuser:appuser requirements.txt .
 # COPY --chown=appuser:appuser cache_manager.py .
 
 # Create __init__.py files to ensure proper Python module structure
 RUN touch /app/__init__.py && \
     touch /app/servers/__init__.py && \
+    touch /app/utils/__init__.py && \
     chown appuser:appuser /app/__init__.py /app/servers/__init__.py
 
 # Test import with dummy environment variables

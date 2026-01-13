@@ -14,9 +14,9 @@ from fastapi.responses import StreamingResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from contextlib import asynccontextmanager
 from langchain_core.messages import HumanMessage
-from langgraph.prebuilt import create_react_agent
+from langchain.agents import create_agent
 from langchain_mcp_adapters.tools import load_mcp_tools
-from langchain_google_vertexai import ChatVertexAI # Official LangChain integration for Vertex AI
+from langchain_google_genai import ChatGoogleGenerativeAI # Official LangChain integration for Google Generative AI
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 from collections import defaultdict
@@ -74,18 +74,18 @@ async def lifespan(app: FastAPI):
     try:
         print("🔧 Initializing LLM and MCP tools...")
         # Initialize the LLM (Claude on Vertex AI)
-        llm = ChatVertexAI(
+        llm = ChatGoogleGenerativeAI(
+            model=GEMINI_MODEL_NAME,
+            temperature=0,
             project=GCP_PROJECT_ID,
-            location=GCP_REGION,
-            model_name=GEMINI_MODEL_NAME,
-            temperature=0
+            location=GCP_REGION
         )
 
         # Store the LLM for later use
         app.state.llm = llm
         
         # Create a simple agent without tools initially
-        app.state.agent = create_react_agent(llm, [])
+        app.state.agent = create_agent(llm, [])
         print("✅ LLM agent initialized successfully.")
         
         # Test the LLM connection
@@ -793,7 +793,7 @@ async def handle_prompt(request: Request):
                             print(f"DEBUG: Failed to load MCP tools: {tools_error}")
                             raise Exception(f"Failed to load MCP tools: {tools_error}")
                         
-                        agent = create_react_agent(app.state.llm, tools)
+                        agent = create_agent(app.state.llm, tools)
                         system_prompt = """You are an expert CRM assistant. When presenting data, always provide comprehensive, well-structured responses similar to professional AI assistants.
 
                             RESPONSE FORMATTING RULES:
@@ -943,7 +943,7 @@ async def direct_query(request: Request):
                     
                     
                     # Create agent with tools for this request
-                    agent = create_react_agent(app.state.llm, tools)
+                    agent = create_agent(app.state.llm, tools)
                     
                     # ainvoke returns a dictionary
                     result = await agent.ainvoke(

@@ -9,7 +9,10 @@ from Crypto.Util.Padding import pad
 import base64
 import jwt
 from bs4 import BeautifulSoup
-
+import re
+from utils.secret_manager import get_secret, get_secret_manager
+import uuid 
+import os
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -19,364 +22,9 @@ class InstanceTools:
     
     def __init__(
         self, 
-        aws_create_instance_url: str, 
-        aws_instance_jwt_secret: str,
-        console_base_url: str = "",
-        console_csrf_token: str = "",
-        console_username: str = "",
-        console_password: str = "",
-        console_account_id: str = "1510"
+        console_email: str = "",
     ):
-        self.aws_create_instance_url = aws_create_instance_url
-        self.aws_instance_jwt_secret = aws_instance_jwt_secret
-        self.console_base_url = console_base_url
-        self.console_csrf_token = console_csrf_token
-        self.console_username = console_username
-        self.console_password = console_password
-        self.session = None  # Will hold authenticated session
-        self._csrf_token_cache = None  # Cache the CSRF token
-        self.console_account_id = console_account_id 
-    
-    def _get_csrf_token_via_login(self) -> Optional[str]:
-        """
-        Get CSRF token by logging into the console using PlatformOS form builder.
-        Complete authentication workflow with proper cookie management:
-        1. GET /login → Extract CSRF token and page_id
-        2. POST /api/sessions → Login with credentials (receives session cookies)
-        3. GET /console → Follow redirect to get console CSRF token
-        4. GET /api/console/accounts → Get available account IDs (with cookies)
-        5. GET /api/console/accounts/switch?id={{account_id}} → Set active account (with cookies)
-        6. Ready to make authenticated API calls (all requests include cookies)
-        """
-        if not self.console_base_url or not self.console_username or not self.console_password:
-            logger.warning("[Console Login] Console credentials not configured for automatic login")
-            return None
-        
-        try:
-            logger.info(f"[Console Login] Starting complete authentication workflow for {self.console_base_url}")
-            
-            # Create a new session
-            if not self.session:
-                self.session = requests.Session()
-            
-            # ========================================================================
-            # Step 1: GET /login → Extract CSRF token and page_id
-            # ========================================================================
-            login_url = f"{self.console_base_url}/login"
-            logger.info(f"[Console Login] Step 1: Fetching login page: {login_url}")
-            
-            login_page_response = self.session.get(login_url, timeout=30)
-            logger.info(f"[Console Login] Cookies after Step 1: {dict(self.session.cookies)}")
-            
-            if login_page_response.status_code != 200:
-                logger.error(f"[Console Login] Failed to load login page. Status: {login_page_response.status_code}")
-                return None
-            
-            # Parse HTML to extract CSRF token and page_id
-            soup = BeautifulSoup(login_page_response.text, 'html.parser')
-            
-            # Extract CSRF token from meta tag
-            csrf_meta = soup.find('meta', {'name': 'csrf-token'})
-            if not csrf_meta or not csrf_meta.get('content'):
-                logger.error("[Console Login] CSRF token not found in meta tag")
-                return None
-            
-            csrf_token = csrf_meta['content']
-            logger.info(f"[Console Login] Found CSRF token: {csrf_token[:30]}...")
-            
-            # Find the login form to extract page_id
-            form = soup.find('form', {'id': 'login-form'}) or soup.find('form')
-            if not form:
-                logger.error("[Console Login] Login form not found")
-                return None
-            
-            # Extract page_id from hidden input (it's dynamic per page load)
-            page_id_input = form.find('input', {'name': 'page_id'})
-            page_id = page_id_input.get('value') if page_id_input else ""
-            logger.info(f"[Console Login] Found page_id: {page_id}")
-            
-            # ========================================================================
-            # Step 2: POST /api/sessions → Login with credentials
-            # ========================================================================
-            logger.info(f"[Console Login] Step 2: Submitting login credentials")
-            
-            # Prepare form data exactly as Postman shows
-            form_data = {
-                "form[email]": self.console_username,
-                "form[password]": self.console_password,
-                "authenticity_token": csrf_token,
-                "utf8": "✓",  # Checkmark character
-                # "form_id": "25901",  # Hardcoded from Postman,
-                "form_id": "261748",
-                "page_id": page_id,  # Dynamic from login page
-                "slug": "login",
-                "slug2": "",
-                "slug3": "",
-                "slugs": "",
-                "resource_id": "new",
-                "parent_resource_id": "",
-                "parent_resource_class": ""
-            }
-            
-            submit_url = f"{self.console_base_url}/api/sessions"
-            headers = {
-                'X-CSRF-Token': csrf_token,
-                'Referer': login_url,
-            }
-            
-            # Session automatically includes cookies from Step 1
-            login_response = self.session.post(
-                submit_url,
-                data=form_data,
-                headers=headers,
-                allow_redirects=False,
-                timeout=30
-            )
-            
-            logger.info(f"[Console Login] Login response status: {login_response.status_code}")
-            logger.info(f"[Console Login] Cookies after Step 2: {dict(self.session.cookies)}")
-            
-            # Check for successful login
-            if login_response.status_code not in [200, 201, 301, 302, 303, 307, 308]:
-                logger.error(f"[Console Login] Login failed. Status: {login_response.status_code}")
-                logger.error(f"[Console Login] Response: {login_response.text[:500]}")
-                return None
-            
-            # ========================================================================
-            # Step 3: GET /console → Follow redirect to get console CSRF token
-            # ========================================================================
-            logger.info(f"[Console Login] Step 3: Following redirect to console")
-            
-            location = login_response.headers.get('Location', '/console')
-            redirect_url = f"{self.console_base_url}{location}" if location.startswith('/') else location
-            
-            # Session automatically includes cookies from Step 2
-            console_response = self.session.get(redirect_url, timeout=30)
-            logger.info(f"[Console Login] Cookies after Step 3: {dict(self.session.cookies)}")
-            
-            # Extract CSRF token from console page
-            soup = BeautifulSoup(console_response.text, 'html.parser')
-            csrf_meta = soup.find('meta', {'name': 'csrf-token'})
-            
-            if not csrf_meta or not csrf_meta.get('content'):
-                logger.warning("[Console Login] Could not extract CSRF token from console page")
-                console_csrf_token = csrf_token  # Fallback to login token
-            else:
-                console_csrf_token = csrf_meta['content']
-                logger.info(f"[Console Login] Got console CSRF token: {console_csrf_token[:30]}...")
-            
-            # ========================================================================
-            # Step 4: Determine account ID (explicit or from API)
-            # ========================================================================
-            account_id = None
-            
-            # PRIORITY 1: Use explicit account_id if provided
-            if self.console_account_id:
-                account_id = str(self.console_account_id)
-                logger.info(f"[Console Login] Using explicit account ID: {account_id}")
-            else:
-                # PRIORITY 2: Try to fetch from accounts API
-                logger.info(f"[Console Login] Step 4: Fetching available accounts")
-                
-                accounts_url = f"{self.console_base_url}/api/console/accounts"
-                accounts_headers = {
-                    'X-CSRF-Token': console_csrf_token,
-                    'Accept': 'application/json',
-                    'X-Requested-With': 'XMLHttpRequest',
-                    'Cache-Control': 'no-cache'
-                }
-                
-                # Session automatically includes cookies from previous steps
-                accounts_response = self.session.get(accounts_url, headers=accounts_headers, timeout=30)
-                logger.info(f"[Console Login] Cookies after Step 4: {dict(self.session.cookies)}")
-                logger.info(f"[Console Login] Accounts response status: {accounts_response.status_code}")
-                
-                if accounts_response.status_code == 200:
-                    try:
-                        accounts_data = accounts_response.json()
-                        logger.info(f"[Console Login] Accounts response: {json.dumps(accounts_data, indent=2)[:500]}")
-                        
-                        # FIXED: Check correct response structure: {"items": {"results": [{"id": "98", ...}]}}
-                        if isinstance(accounts_data, dict):
-                            items = accounts_data.get('items', {})
-                            if isinstance(items, dict):
-                                results = items.get('results', [])
-                                if isinstance(results, list) and len(results) > 0:
-                                    account_id = str(results[0].get('id') or results[0].get('uuid', ''))
-                                    logger.info(f"[Console Login] Extracted account ID from API: {account_id}")
-                        
-                        # Fallback: Check other possible structures
-                        if not account_id:
-                            if isinstance(accounts_data, list) and len(accounts_data) > 0:
-                                account_id = str(accounts_data[0].get('id') or accounts_data[0].get('uuid', ''))
-                            elif isinstance(accounts_data, dict):
-                                if 'accounts' in accounts_data and len(accounts_data['accounts']) > 0:
-                                    account_id = str(accounts_data['accounts'][0].get('id') or accounts_data['accounts'][0].get('uuid', ''))
-                                elif 'data' in accounts_data and len(accounts_data['data']) > 0:
-                                    account_id = str(accounts_data['data'][0].get('id') or accounts_data['data'][0].get('uuid', ''))
-                                elif 'id' in accounts_data:
-                                    account_id = str(accounts_data['id'])
-                        
-                    except json.JSONDecodeError as e:
-                        logger.warning(f"[Console Login] Could not parse accounts response as JSON: {str(e)}")
-                        logger.warning(f"[Console Login] Response text: {accounts_response.text[:500]}")
-                else:
-                    logger.warning(f"[Console Login] Failed to fetch accounts. Status: {accounts_response.status_code}")
-            
-            # ========================================================================
-            # Step 5: GET /api/console/accounts/switch → Set active account (CRITICAL)
-            # ========================================================================
-            if account_id:
-                logger.info(f"[Console Login] Step 5: Setting active account to ID: {account_id} (CRITICAL STEP)")
-                
-                switch_url = f"{self.console_base_url}/api/console/accounts/switch"
-                switch_params = {'id': account_id}
-                switch_headers = {
-                    'X-CSRF-Token': console_csrf_token,
-                    'Accept': 'application/json',
-                    'X-Requested-With': 'XMLHttpRequest',
-                    'Cache-Control': 'no-cache'
-                }
-                
-                # Session automatically includes cookies from previous steps
-                switch_response = self.session.get(
-                    switch_url,
-                    params=switch_params,
-                    headers=switch_headers,
-                    timeout=30
-                )
-                
-                logger.info(f"[Console Login] Switch response status: {switch_response.status_code}")
-                logger.info(f"[Console Login] Cookies after Step 5: {dict(self.session.cookies)}")
-                
-                if switch_response.status_code in [200, 302, 303]:
-                    logger.info(f"[Console Login] ✅ Account switched successfully to ID: {account_id}")
-                    logger.info(f"[Console Login] Session now has account_id set - ready for API calls")
-                else:
-                    logger.warning(f"[Console Login] Account switch returned status {switch_response.status_code}")
-                    logger.warning(f"[Console Login] Response: {switch_response.text[:500]}")
-                    logger.warning(f"[Console Login] This may cause 'is_active_account_member' errors")
-            else:
-                logger.error("[Console Login] ❌ CRITICAL: No account ID available - cannot switch account!")
-                logger.error("[Console Login] This will cause 'is_active_account_member' authorization to fail")
-                logger.error("[Console Login] Please set console_account_id parameter or ensure accounts API returns valid data")
-            
-            # ========================================================================
-            # Step 6: Authentication complete - cache token and return
-            # ========================================================================
-            logger.info(f"[Console Login] ✅ Complete authentication workflow finished successfully")
-            logger.info(f"[Console Login] Final cookies in session: {dict(self.session.cookies)}")
-            logger.info(f"[Console Login] Ready to make authenticated API calls")
-            
-            self._csrf_token_cache = console_csrf_token
-            self.console_csrf_token = console_csrf_token
-            return console_csrf_token
-            
-        except requests.exceptions.Timeout:
-            logger.error(f"[Console Login] Login request timed out")
-            return None
-        except Exception as e:
-            logger.error(f"[Console Login] Error during login: {str(e)}")
-            import traceback
-            logger.error(traceback.format_exc())
-            return None
-    
-    def _get_console_headers(self) -> Dict[str, str]:
-        """
-        Get headers for Console API requests with CRITICAL headers for API access.
-        Missing these headers causes HTML redirects instead of JSON responses.
-        Note: Cookies are automatically handled by the session object.
-        """
-        # Try to use provided CSRF token first
-        csrf_token = self.console_csrf_token
-        
-        # If no token provided, try cached token
-        if not csrf_token and self._csrf_token_cache:
-            logger.info("[Console API] Using cached CSRF token")
-            csrf_token = self._csrf_token_cache
-        
-        # If still no token, try to get one via login
-        if not csrf_token and self.console_username and self.console_password:
-            logger.info("[Console API] No CSRF token, attempting automatic login")
-            csrf_token = self._get_csrf_token_via_login()
-            # Update instance variable if we got a token
-            if csrf_token:
-                self.console_csrf_token = csrf_token
-        
-        # Log cookie status
-        if self.session:
-            logger.info(f"[Console API] Session cookies available: {list(self.session.cookies.keys())}")
-        
-        # CRITICAL: These headers are required for API access
-        headers = {
-            "Content-Type": "application/json",
-            "Accept": "application/json",  # CRITICAL: Tells server we want JSON
-            "X-Requested-With": "XMLHttpRequest",  # CRITICAL: Identifies as AJAX request
-            "Cache-Control": "no-cache"
-        }
-
-        # Add Referer header (matching Postman format)
-        if self.console_base_url:
-            headers["Referer"] = f"{self.console_base_url}/login"
-        
-        # CRITICAL: Only add X-CSRF-Token if we have a valid token (not None)
-        if csrf_token:
-            headers["X-CSRF-Token"] = csrf_token
-            logger.info(f"[Console API] Using CSRF token: {csrf_token[:20]}...")
-        else:
-            logger.error("[Console API] ⚠️ CRITICAL: No CSRF token available - request will fail!")
-        
-        # Add Cookie header explicitly (matching Postman format)
-        if self.session and self.session.cookies:
-            # Get only the _pos_session cookie
-            pos_session_value = self.session.cookies.get('_pos_session')
-            if pos_session_value:
-                headers["Cookie"] = f"_pos_session={pos_session_value}"
-                logger.info(f"[Console API] Adding Cookie header with _pos_session: {pos_session_value[:20]}...")
-            else:
-                logger.warning("[Console API] ⚠️ _pos_session cookie not found in session")
-        else:
-            logger.warning("[Console API] ⚠️ No session cookies available - Cookie header will not be sent")
-
-        return headers
-    
-    def _make_console_request(self, method: str, url: str, **kwargs) -> requests.Response:
-        """
-        Make a request to Console API using authenticated session if available.
-        
-        Args:
-            method: HTTP method (GET, POST, etc.)
-            url: Full URL to request
-            **kwargs: Additional arguments for requests
-        
-        Returns:
-            Response object
-        """
-        # Use authenticated session if available, otherwise create new request
-        if self.session:
-            if method.upper() == "GET":
-                return self.session.get(url, **kwargs)
-            elif method.upper() == "POST":
-                return self.session.post(url, **kwargs)
-            else:
-                raise ValueError(f"Unsupported HTTP method: {method}")
-        else:
-            if method.upper() == "GET":
-                return requests.get(url, **kwargs)
-            elif method.upper() == "POST":
-                return requests.post(url, **kwargs)
-            else:
-                raise ValueError(f"Unsupported HTTP method: {method}")
-    
-    def _create_jwt_payload(self, data: Dict[str, Any]) -> tuple:
-        """Create JWT payload with timestamp."""
-        timestamp = str(int(time.time()))
-        payload = {
-            "timestamp": timestamp,
-            **data
-        }
-        return payload, timestamp
-    
+        self.console_email = console_email
     def _encrypt_token(self, token: str, secret_key: str) -> str:
         """Encrypt JWT token using AES-256-CBC to match PlatformOS encrypt filter format.
         
@@ -406,343 +54,315 @@ class InstanceTools:
     
     def _create_authorization_header(self) -> str:
         """Create the Authorization header with encrypted JWT token for AWS Gateway."""
-        timestamp = str(int(time.time()))
-        payload = {"timestamp": timestamp}
-        token = jwt.encode(payload, self.aws_instance_jwt_secret, algorithm='HS256')
-        encrypted_token = self._encrypt_token(token, self.aws_instance_jwt_secret)
-        return encrypted_token
-    
-    # ============================================================================
-    # CONSOLE API METHODS (Frontend validation + Direct database save)
-    # ============================================================================
-    
-    # def check_subdomain_availability(self, subdomain: str) -> Dict[str, Any]:
-    #     """
-    #     Check subdomain availability via Console API (frontend validation).
-    #     This does NOT save to database, only validates.
-        
-    #     Endpoint: GET /api/console/subdomain/check
-        
-    #     Args:
-    #         subdomain: The subdomain to check
-        
-    #     Returns:
-    #         Dict with availability status
-    #     """
-    #     logger.info(f"[Console API] Checking subdomain availability: {subdomain}")
-        
-    #     if not self.console_base_url:
-    #         return {
-    #             "success": False,
-    #             "error": "Console URL not configured. Set console_base_url parameter."
-    #         }
-        
-    #     # Ensure we have authentication
-    #     if not self.session and not self.console_csrf_token:
-    #         if self.console_username and self.console_password:
-    #             logger.info("[Console API] No session found, attempting to login...")
-    #             csrf_token = self._get_csrf_token_via_login()
-    #             if csrf_token:
-    #                 self.console_csrf_token = csrf_token
-    #             else:
-    #                 logger.warning("[Console API] Failed to obtain CSRF token via login")
-        
-    #     try:
-    #         url = f"{self.console_base_url}/console/subdomain/check"
-    #         headers = self._get_console_headers()
-    #         params = {"name": subdomain}
-            
-    #         logger.info(f"[Console API] Making request to: {url}")
-    #         logger.info(f"[Console API] Headers: {headers}")
-    #         response = self._make_console_request("GET", url, headers=headers, params=params, timeout=30)
-            
-    #         # Check if we got HTML instead of JSON
-    #         content_type = response.headers.get('Content-Type', '')
-    #         logger.info(f"[Console API] Response Content-Type: {content_type}")
-    #         logger.info(f"[Console API] Response status: {response.status_code}")
-    #         logger.info(f"[Console API] Final URL: {response.url}")
-            
-    #         if 'text/html' in content_type:
-    #             logger.error(f"[Console API] ERROR: Got HTML instead of JSON")
-    #             if 'login' in response.url.lower():
-    #                 logger.error(f"[Console API] Redirected to login page - authentication failed")
-    #                 return {
-    #                     "success": False,
-    #                     "error": "Authentication failed - redirected to login page",
-    #                     "subdomain": subdomain,
-    #                     "api": "console"
-    #                 }
-    #             else:
-    #                 logger.error(f"[Console API] Got HTML response - check endpoint URL or headers")
-    #                 return {
-    #                     "success": False,
-    #                     "error": "Received HTML instead of JSON - check endpoint or headers",
-    #                     "response_sample": response.text[:200],
-    #                     "subdomain": subdomain,
-    #                     "api": "console"
-    #                 }
-            
-    #         if response.status_code == 200:
-    #             if not response.text or not response.text.strip():
-    #                 logger.warning(f"[Console API] Empty response from subdomain check endpoint")
-    #                 return {
-    #                     "success": False,
-    #                     "error": "Empty response from console API",
-    #                     "subdomain": subdomain,
-    #                     "api": "console"
-    #                 }
-                
-    #             try:
-    #                 result = response.json()
-    #                 is_available = result.get("available", False)
-                    
-    #                 logger.info(f"[Console API] Subdomain '{subdomain}' availability: {is_available}")
-    #                 return {
-    #                     "success": True,
-    #                     "available": is_available,
-    #                     "subdomain": subdomain,
-    #                     "result": result,
-    #                     "message": f"Subdomain '{subdomain}' is {'available' if is_available else 'unavailable'}",
-    #                     "api": "console"
-    #                 }
-    #             except json.JSONDecodeError as json_err:
-    #                 logger.error(f"[Console API] Invalid JSON response: {response.text[:200]}")
-    #                 return {
-    #                     "success": False,
-    #                     "error": f"Invalid JSON response: {str(json_err)}",
-    #                     "response_text": response.text[:500],
-    #                     "subdomain": subdomain,
-    #                     "api": "console"
-    #                 }
-    #         else:
-    #             logger.warning(f"[Console API] Check failed. Status: {response.status_code}")
-    #             return {
-    #                 "success": False,
-    #                 "status_code": response.status_code,
-    #                 "error": response.text[:500] if response.text else "No response body",
-    #                 "subdomain": subdomain,
-    #                 "api": "console"
-    #             }
-                
-    #     except requests.exceptions.Timeout:
-    #         return {"success": False, "error": "Request timed out after 30 seconds", "api": "console"}
-    #     except Exception as e:
-    #         logger.error(f"[Console API] Check error: {str(e)}")
-    #         import traceback
-    #         logger.error(f"[Console API] Traceback: {traceback.format_exc()}")
-    #         return {
-    #             "success": False,
-    #             "error": str(e),
-    #             "subdomain": subdomain,
-    #             "api": "console"
-    #         }
-    
-    def create_instance_console(
+        try:
+            secret_mgr = get_secret_manager()
+            aws_instance_jwt_secret = secret_mgr.get_secret("insites-auth-key-prod")
+            timestamp = str(int(time.time()))
+            payload = {"timestamp": timestamp}
+            token = jwt.encode(payload, aws_instance_jwt_secret, algorithm='HS256')
+            encrypted_token = self._encrypt_token(token, aws_instance_jwt_secret)
+            return encrypted_token
+        except Exception as e:
+            logger.error(f"❌ Failed to create authorization header: {e}")
+            import traceback
+            logger.error(f"Traceback: {traceback.format_exc()}")
+            raise ValueError(f"Failed to retrieve AWS JWT secret from Secret Manager: {str(e)}")
+
+    def create_instance_database(
         self,
         name: str,
         subdomain: str,
-        environment: str,
-        instance_data_centre: str,
-        instance_billing_plan: str,
-        tags: Optional[List[str]] = None,
-        pay_on_invoice: bool = False,
-        domain_ids: Optional[List[str]] = None,
-        image: Optional[str] = None
+        contact_uuid: str,
+        default_domain: str = "staging.oregon.platform-os.com"
     ) -> Dict[str, Any]:
         """
-        Create instance via Console API (direct database save).
+        Create an instance record in the database via Console API.
         
-        Endpoint: POST /api/console/instances
-        Saves subdomain to database via GraphQL mutation (line 36 of create_instance.graphql)
+        Endpoint: POST https://console.insites.io/databases/api/v2/database/19410/items
         
         Args:
-            name: Instance name
-            subdomain: Instance subdomain
-            environment: 'Staging' or 'Production'
-            instance_data_centre: Data centre ID
-            instance_billing_plan: Billing plan ID
-            tags: Optional list of tags
-            pay_on_invoice: Payment method
-            domain_ids: Optional domain IDs
-            image: Optional image URL or base64
+            name: Instance name (e.g., "test_claude_4")
+                - Will be converted to URL format: underscores to hyphens, lowercase
+                - Example: "test_claude_4" -> "test-claude-4"
+            default_domain: Default domain to append (default: "staging.oregon.platform-os.com")
+                - Final URL will be: "{converted_name}.{default_domain}"
         
         Returns:
             Dict with creation result
         """
-        logger.info(f"[Console API] Creating instance: {subdomain}")
-        
-        if not self.console_base_url:
+        logger.info(f"[Database API] Creating instance record: {subdomain}")
+        secret_mgr = get_secret_manager()
+        console_api_key = secret_mgr.get_secret("console-instance-api-key")
+        if not console_api_key:
             return {
                 "success": False,
-                "error": "Console URL not configured. Set console_base_url parameter."
+                "error": "Instance API key not configured"
             }
         
-        # Step 1: Check subdomain availability
-        logger.info(f"[Console API] Step 1: Checking subdomain availability")
-        availability_check = self.validate_subdomain(subdomain)
+        # Convert name to URL format: underscores to hyphens, lowercase
+        url_name = re.sub(r"[\s_]+", "-", subdomain).lower()
+        instance_url = f"{url_name}.{default_domain}"
         
-        if not availability_check.get("success"):
-            return {
-                "success": False,
-                "error": "Subdomain availability check failed",
-                "check_result": availability_check
-            }
+        logger.info(f"[Database API] Name: {subdomain} -> URL: {instance_url}")
         
-        if not availability_check.get("available"):
-            return {
-                "success": False,
-                "error": f"Subdomain '{subdomain}' is not available",
-                "check_result": availability_check
-            }
+        # Database API endpoint
+        api_url = "https://console.insites.io/databases/api/v2/database/19410/items"
         
-        logger.info(f"[Console API] Subdomain available. Proceeding with creation.")
+        # Headers with instance API key
+        headers = {
+            "Authorization": console_api_key,
+            "Content-Type": "application/json"
+        }
         
-        # Step 2: Create instance
+        # Payload with fixed values except name and url
+        payload = {
+            "properties.name": name,
+            "properties.url": instance_url,
+            "properties.type": "instance",
+            "properties.environment": "Staging",
+            "properties.instance_data_centre": "67",
+            "properties.instance_billing_plan": "69",
+            "properties.status": "Initialising",
+            "properties.account_id": "109",
+            "properties.uuid": str(uuid.uuid4()),
+            "properties.created_by": contact_uuid,
+            "properties.subdomain": subdomain,
+
+        }
+        
         try:
-            # CRITICAL: Use /api/console/instances not /console
-            url = f"{self.console_base_url}/api/console/instances"
-            headers = self._get_console_headers()
+            logger.info(f"[Database API] Sending POST request to: {api_url}")
+            logger.info(f"[Database API] Payload: {json.dumps(payload, indent=2)}")
             
-            payload = {
-                "payload": {
-                    "properties": {
-                        "name": name,
-                        "subdomain": subdomain,
-                        "tags": tags or [],
-                        "path": "/root",
-                        "domain_ids": domain_ids or [],
-                        "type": "instance",
-                        # "environment": environment,
-                        "environment": "Staging",
-                        "instance_data_centre": instance_data_centre,
-                        "instance_billing_plan": instance_billing_plan,
-                        "status": "Initialising"
-                    },
-                    "pay_on_invoice": pay_on_invoice
+            response = requests.post(
+                api_url,
+                headers=headers,
+                json=payload,
+                timeout=60
+            )
+            
+            logger.info(f"[Database API] Response status: {response.status_code}")
+            logger.info(f"[Database API] Response Content-Type: {response.headers.get('Content-Type', '')}")
+            
+            # Check if response is HTML instead of JSON
+            content_type = response.headers.get('Content-Type', '').lower()
+            if 'text/html' in content_type or response.text.strip().startswith('<'):
+                logger.error(f"[Database API] ERROR: Got HTML instead of JSON")
+                return {
+                    "success": False,
+                    "error": "Received HTML response instead of JSON",
+                    "status_code": response.status_code,
+                    "content_type": content_type,
+                    "response_preview": response.text[:200]
                 }
-            }
-            
-            if image:
-                payload["payload"]["properties"]["image"] = image
-            
-            logger.info(f"[Console API] Sending create request to: {url}")
-            logger.info(f"[Console API] Headers: {headers}")
-            logger.info(f"[Console API] Payload: {json.dumps(payload, indent=2)}")
-            
-            response = self._make_console_request("POST", url, headers=headers, json=payload, timeout=60)
-            
-            # Check if we got HTML instead of JSON
-            content_type = response.headers.get('Content-Type', '')
-            logger.info(f"[Console API] Response Content-Type: {content_type}")
-            logger.info(f"[Console API] Response status: {response.status_code}")
-            logger.info(f"[Console API] Final URL: {response.url}")
-            
-            if 'text/html' in content_type:
-                logger.error(f"[Console API] ERROR: Got HTML instead of JSON")
-                if 'login' in response.url.lower():
-                    return {
-                        "success": False,
-                        "error": "Authentication failed - redirected to login page",
-                        "status_code": response.status_code,
-                        "api": "console"
-                    }
-                else:
-                    return {
-                        "success": False,
-                        "error": "Received HTML instead of JSON - check endpoint URL or headers",
-                        "response_sample": response.text[:200],
-                        "status_code": response.status_code,
-                        "api": "console"
-                    }
             
             if response.status_code in [200, 201]:
                 try:
                     result = response.json()
-                    logger.info(f"[Console API] Instance created successfully: {subdomain}")
+                    logger.info(f"[Database API] Instance record created successfully: {name}")
                     return {
                         "success": True,
-                        "subdomain": subdomain,
+                        "name": name,
+                        "url": instance_url,
                         "result": result,
-                        "message": f"Instance '{subdomain}' created successfully via Console API",
-                        "saved_to_database": True,
-                        "api": "console"
+                        "message": f"Instance record '{name}' created successfully",
+                        "api": "database"
                     }
                 except json.JSONDecodeError as json_err:
-                    logger.error(f"[Console API] Invalid JSON response: {response.text[:200]}")
+                    logger.error(f"[Database API] Invalid JSON response: {response.text[:200]}")
                     return {
                         "success": False,
-                        "error": f"Invalid JSON response from Console API: {str(json_err)}",
+                        "error": f"Invalid JSON response: {str(json_err)}",
                         "status_code": response.status_code,
-                        "api": "console"
+                        "response_preview": response.text[:500]
                     }
             elif response.status_code == 400:
                 try:
                     error_data = response.json()
-                    error_msg = error_data.get("errors", [{}])[0].get("message", "Instance creation failed")
+                    error_msg = error_data.get("error") or error_data.get("message", "Bad request")
                 except:
-                    error_msg = "Instance creation failed"
+                    error_msg = "Bad request"
                     error_data = response.text
-                logger.warning(f"[Console API] Creation failed: {error_msg}")
+                logger.warning(f"[Database API] Creation failed: {error_msg}")
                 return {
                     "success": False,
                     "error": error_msg,
                     "details": error_data,
                     "status_code": 400,
-                    "api": "console"
+                    "api": "database"
                 }
             elif response.status_code == 401:
                 return {
                     "success": False,
-                    "error": "Unauthorized. Check credentials or CSRF token.",
+                    "error": "Unauthorized. Check instance API key.",
                     "status_code": 401,
-                    "api": "console"
+                    "api": "database"
                 }
             else:
-                logger.warning(f"[Console API] Creation failed. Status: {response.status_code}")
+                logger.warning(f"[Database API] Creation failed. Status: {response.status_code}")
                 return {
                     "success": False,
                     "status_code": response.status_code,
                     "error": response.text[:500] if response.text else "No response body",
-                    "subdomain": subdomain,
-                    "api": "console"
+                    "name": name,
+                    "api": "database"
                 }
                 
         except requests.exceptions.Timeout:
-            return {"success": False, "error": "Request timed out after 60 seconds", "api": "console"}
+            return {
+                "success": False,
+                "error": "Request timed out after 60 seconds",
+                "api": "database"
+            }
         except Exception as e:
-            logger.error(f"[Console API] Creation error: {str(e)}")
+            logger.error(f"[Database API] Creation error: {str(e)}")
             import traceback
             logger.error(traceback.format_exc())
             return {
                 "success": False,
                 "error": str(e),
-                "subdomain": subdomain,
-                "api": "console"
+                "name": name,
+                "api": "database"
             }
     
+    def _get_request_user_from_contact(self) -> Dict[str, Any]:
+        """
+        Get contact information from contact lookup using console_email.
+        
+        Returns:
+            Dict with contact information including 'uuid', 'id', and 'email' keys
+        """
+        if not self.console_email:
+            logger.error("No email provided for contact lookup")
+            raise ValueError("No email provided for contact lookup")
+        
+        try:
+            from servers.crm_tools import CRMTools
+            
+            instance_url = "https://console.insites.io"
+            
+            # Get API key from Secret Manager
+            try:
+                secret_mgr = get_secret_manager()
+                instance_api_key = secret_mgr.get_secret("console-instance-api-key")
+            except Exception as secret_error:
+                logger.error(f"❌ Failed to get console API key from Secret Manager: {secret_error}")
+                raise ValueError(f"Failed to retrieve console-instance-api-key from Secret Manager: {str(secret_error)}")
+            
+            crm_tools = CRMTools(instance_url, instance_api_key)
+            params = {
+                "search_by": "email",
+                "keyword": self.console_email,
+                "size": 1,
+                "page": 1
+            }
+            
+            contact_result = crm_tools.get_contacts(params)
+            
+            if not contact_result.get("success"):
+                error_msg = contact_result.get("error", "Unknown error fetching contact")
+                logger.error(f"❌ Failed to fetch contact: {error_msg}")
+                raise ValueError(f"Failed to fetch contact: {error_msg}")
+            
+            # Handle different response structures
+            result_data = contact_result.get("result", {})
+            
+            # Try different possible structures
+            contacts = None
+            if isinstance(result_data, list):
+                contacts = result_data
+            elif isinstance(result_data, dict):
+                if "results" in result_data:
+                    contacts = result_data["results"]
+                elif "data" in result_data:
+                    contacts = result_data["data"] if isinstance(result_data["data"], list) else [result_data["data"]]
+                elif "contacts" in result_data:
+                    contacts = result_data["contacts"]
+            
+            if not contacts or len(contacts) == 0:
+                logger.error(f"❌ No contact found for email: {self.console_email}")
+                raise ValueError(f"No contact found for email: {self.console_email}")
+            
+            contact = contacts[0]
+            
+            # Ensure required fields exist
+            if "uuid" not in contact or "id" not in contact:
+                logger.error(f"❌ Contact found but missing required fields (uuid/id). Available keys: {list(contact.keys())}")
+                raise ValueError(f"Contact found but missing required fields (uuid/id)")
+            
+            logger.info(f"✅ Found contact: email={contact.get('email', self.console_email)}")
+            return contact
+            
+        except ValueError:
+            raise
+        except Exception as e:
+            logger.error(f"❌ Error fetching contact: {e}")
+            raise ValueError(f"Failed to fetch contact for {self.console_email}: {str(e)}")
     # ============================================================================
     # AWS GATEWAY METHODS (Step function validation + creation)
     # ============================================================================
     
-    def validate_subdomain(self, subdomain: str) -> Dict[str, Any]:
+    def validate_subdomain(self, name: str) -> Dict[str, Any]:
         """Validate subdomain availability via AWS Gateway (step function validation)."""
-        logger.info(f"[AWS Gateway] Validating subdomain: {subdomain}")
-        
+        subdomain = re.sub(r"[\s_]+", "-", name).lower()
+        logger.info(f"[VALIDATE_SUBDOMAIN] Normalized subdomain: {subdomain}")
+
         try:
-            auth_token = self._create_authorization_header()
-            url = f"{self.aws_create_instance_url}/Staging/subdomain-check"
+            logger.info(f"[VALIDATE_SUBDOMAIN] Step 1: Getting auth token...")
+            try:
+                auth_token = self._create_authorization_header()
+                logger.info(f"[VALIDATE_SUBDOMAIN] ✅ Auth token created (length: {len(auth_token)})")
+            except Exception as auth_error:
+                error_msg = f"Failed to authenticate: {str(auth_error)}"
+                logger.error(f"❌ [VALIDATE_SUBDOMAIN] {error_msg}")
+                import sys
+                sys.stdout.flush()
+                sys.stderr.flush()
+                return {
+                    "success": False,
+                    "error": error_msg,
+                    "subdomain": subdomain,
+                    "api": "aws_gateway",
+                    "error_type": "authentication_failed"
+                }
+            
+            # Get subdomain check URL from Secret Manager
+            logger.info(f"[VALIDATE_SUBDOMAIN] Step 2: Getting subdomain check URL from Secret Manager...")
+            try:
+                secret_mgr = get_secret_manager()
+                subdomain_check = secret_mgr.get_secret("insites-validate-subdomain-prod")
+                url = subdomain_check
+                logger.info(f"[VALIDATE_SUBDOMAIN] ✅ Retrieved URL: {url[:50]}...")
+            except Exception as secret_error:
+                error_msg = f"Failed to retrieve subdomain check URL from Secret Manager: {str(secret_error)}"
+                logger.error(f"❌ [VALIDATE_SUBDOMAIN] {error_msg}")
+                return {
+                    "success": False,
+                    "error": error_msg,
+                    "subdomain": subdomain,
+                    "api": "aws_gateway",
+                    "error_type": "secret_not_found",
+                    "secret_name": "insites-validate-subdomain-prod"
+                }
+            
             headers = {
                 "Content-Type": "application/json",
                 "Authorization": auth_token
             }
             params = {"subdomain": subdomain}
             
+            logger.info(f"[VALIDATE_SUBDOMAIN] Step 3: Making GET request to AWS Gateway...")
+            logger.info(f"[VALIDATE_SUBDOMAIN] URL: {url}")
+            logger.info(f"[VALIDATE_SUBDOMAIN] Params: {params}")
+            
             response = requests.get(url, headers=headers, params=params, timeout=30)
+            
+            logger.info(f"[VALIDATE_SUBDOMAIN] Response status: {response.status_code}")
             
             if response.status_code == 200:
                 result = response.json()
                 is_available = result.get("status") == "available"
-                logger.info(f"[AWS Gateway] Subdomain validation result: {result}")
+                logger.info(f"[VALIDATE_SUBDOMAIN] ✅ Success - Subdomain '{subdomain}' is {'available' if is_available else 'unavailable'}")
                 return {
                     "success": True,
                     "result": result,
@@ -752,23 +372,35 @@ class InstanceTools:
                     "api": "aws_gateway"
                 }
             else:
-                logger.warning(f"[AWS Gateway] Validation failed. Status: {response.status_code}")
+                error_msg = f"HTTP {response.status_code}: {response.text[:500]}"
+                logger.error(f"❌ [VALIDATE_SUBDOMAIN] Validation failed: {error_msg}")
+
                 return {
                     "success": False,
                     "status_code": response.status_code,
-                    "error": response.text,
+                    "error": response.text[:500],
                     "subdomain": subdomain,
-                    "api": "aws_gateway"
+                    "api": "aws_gateway",
+                    "error_type": "http_error"
                 }
         except requests.exceptions.Timeout:
-            return {"success": False, "error": "Request timed out after 30 seconds", "api": "aws_gateway"}
-        except Exception as e:
-            logger.error(f"[AWS Gateway] Validation error: {str(e)}")
             return {
                 "success": False,
-                "error": str(e),
+                "error": error_msg,
                 "subdomain": subdomain,
-                "api": "aws_gateway"
+                "api": "aws_gateway",
+                "error_type": "timeout"
+            }
+        except Exception as e:
+            error_msg = str(e)
+            logger.error(f"❌ [VALIDATE_SUBDOMAIN] Unexpected error: {error_msg}")
+
+            return {
+                "success": False,
+                "error": error_msg,
+                "subdomain": subdomain,
+                "api": "aws_gateway",
+                "error_type": "unexpected_error"
             }
     
     def create_instance(self, instance_data: Dict[str, Any], environment: str = "production") -> Dict[str, Any]:
@@ -793,7 +425,7 @@ class InstanceTools:
         """
         logger.info(f"[AWS Gateway] Creating instance with data: {instance_data}")
         
-        required_fields = ["subdomain", "pos_billing_plan_id", "pos_data_centre_id"]
+        required_fields = ["subdomain"]
         missing_fields = [field for field in required_fields if field not in instance_data]
         
         if missing_fields:
@@ -805,7 +437,8 @@ class InstanceTools:
         subdomain = instance_data["subdomain"]
         
         logger.info(f"[AWS Gateway] Step 1: Validating subdomain '{subdomain}'")
-        validation_result = self.validate_subdomain(subdomain)
+
+        validation_result = self.validate_subdomain(name=subdomain)
         
         if not validation_result["success"]:
             return {
@@ -822,10 +455,32 @@ class InstanceTools:
             }
         
         logger.info(f"[AWS Gateway] Subdomain '{subdomain}' is available. Proceeding with instance creation.")
-        
+
         try:
-            auth_token = self._create_authorization_header()
-            endpoint = f"{self.aws_create_instance_url}/Staging/create-instance"
+            # Get auth token (this uses Secret Manager)
+            try:
+                auth_token = self._create_authorization_header()
+            except Exception as auth_error:
+                logger.error(f"❌ Failed to get auth token: {auth_error}")
+                return {
+                    "success": False,
+                    "error": f"Failed to authenticate: {str(auth_error)}",
+                    "subdomain": subdomain,
+                    "api": "aws_gateway"
+                }
+            
+            # Get create instance endpoint from Secret Manager
+            try:
+                secret_mgr = get_secret_manager()
+                endpoint = secret_mgr.get_secret("insites-create-instance-prod")
+            except Exception as secret_error:
+                logger.error(f"❌ Failed to get create instance endpoint: {secret_error}")
+                return {
+                    "success": False,
+                    "error": f"Failed to retrieve create instance endpoint from Secret Manager: {str(secret_error)}",
+                    "subdomain": subdomain,
+                    "api": "aws_gateway"
+                }
             headers = {
                 "Content-Type": "application/json",
                 "Authorization": auth_token
@@ -835,20 +490,20 @@ class InstanceTools:
             payload = {
                 "metadata": {
                     "request_time": current_time,
-                    "request_environment": environment,
-                    "request_full_url": instance_data.get("request_full_url", "console-uat.staging.oregon.platform-os.com"),
+                    "request_environment": "Staging",
+                    "request_full_url": "console.insites.io",
                     "request_ip": instance_data.get("request_ip", ""),
-                    "request_user_id": instance_data.get("request_user_id", "54")
+                    "request_user_id": instance_data.get("request_user_id", "76")
                 },
                 "properties": {
                     "partner_id": instance_data.get("partner_id", "11"),
-                    "pos_billing_plan_id": instance_data["pos_billing_plan_id"],
-                    "pos_data_centre_id": instance_data["pos_data_centre_id"],
+                    "pos_billing_plan_id": "246",
+                    "pos_data_centre_id": "8",
                     "instance_params": {
                         "name": subdomain,
                         "tag_list": ",".join(instance_data.get("tags", []))
                     },
-                    "created_by": instance_data.get("created_by", ""),
+                    "created_by": instance_data.get("created_by"),
                     "is_duplication": str(instance_data.get("is_duplication", "false")).lower()
                 }
             }
@@ -898,121 +553,189 @@ class InstanceTools:
     def create_instance_complete_workflow(
         self,
         name: str,
-        subdomain: str,
-        environment: str,
-        instance_data_centre: str,
-        instance_billing_plan: str,
-        pos_billing_plan_id: str,
-        pos_data_centre_id: str,
-        tags: Optional[List[str]] = None,
-        created_by: Optional[str] = "",
-        pay_on_invoice: bool = False,
-        domain_ids: Optional[List[str]] = None,
-        image: Optional[str] = None,
-        is_duplication: bool = False,
-        request_full_url: str = "",
-        request_ip: str = "",
-        request_user_id: str = "",
-        partner_id: str = "11"
+        environment: str = "production",
     ) -> Dict[str, Any]:
         """
         Complete instance creation workflow:
         1. Check subdomain availability
-        2. Save to database via Console API (create_instance_console) - CRUCIAL STEP
+        2. Save to database via Database API - CRUCIAL STEP
         3. Update via AWS Gateway step function (create_instance)
         
         The Console API creates the initial database record which is then
         updated by the step function.
         
         Args:
-            name: Instance name
-            subdomain: Instance subdomain
-            environment: 'Staging' or 'Production'
-            instance_data_centre: Data centre ID (for Console API)
-            instance_billing_plan: Billing plan ID (for Console API)
-            pos_billing_plan_id: POS billing plan ID (for AWS Gateway)
-            pos_data_centre_id: POS data centre ID (for AWS Gateway)
-            tags: Optional list of tags
-            created_by: User who created the instance
-            pay_on_invoice: Payment method
-            domain_ids: Optional domain IDs
-            image: Optional image URL or base64
-            is_duplication: Whether this is a duplication
-            request_full_url: Request URL for metadata
-            request_ip: Request IP for metadata
-            request_user_id: User ID for metadata
-            partner_id: Partner ID
+            name: Instance name (will be converted to subdomain format)
+            environment: 'staging' or 'production' (default: 'production')
         
         Returns:
             Dict with complete workflow result
         """
-        logger.info(f"[COMPLETE WORKFLOW] Starting for subdomain: {subdomain}")
-        
-        workflow_results = {"subdomain": subdomain, "steps": {}}
-        
-        # Step 1: Check subdomain availability
-        logger.info(f"[COMPLETE WORKFLOW] Step 1: Checking subdomain availability")
-        availability_check = self.validate_subdomain(subdomain)
-        workflow_results["steps"]["1_availability_check"] = availability_check
-        
-        if not availability_check.get("success") or not availability_check.get("available"):
+        try:
+            if not name:
+                return {
+                    "success": False,
+                    "error": "Instance name is required",
+                    "workflow_results": {}
+                }
+            
+            # Normalize environment (capitalize first letter)
+            environment = environment.capitalize()
+            
+            subdomain = re.sub(r"[\s_]+", "-", name).lower()
+
+            logger.info(f"[CREATE_INSTANCE_WORKFLOW] Starting for name: '{name}', subdomain: '{subdomain}', environment: '{environment}'")
+            
+            workflow_results = {"subdomain": subdomain, "name": name, "steps": {}}
+            
+            # Step 1: Check subdomain availability
+            logger.info(f"[CREATE_INSTANCE_WORKFLOW] Step 1: Checking subdomain availability")
+            availability_check = self.validate_subdomain(name)
+            workflow_results["steps"]["1_availability_check"] = availability_check
+            
+            if not availability_check.get("success"):
+                error_msg = availability_check.get("error", "Unknown error")
+                logger.error(f"❌ [CREATE_INSTANCE_WORKFLOW] Step 1 failed: {error_msg}")
+                return {
+                    "success": False,
+                    "error": f"Subdomain validation failed: {error_msg}",
+                    "workflow_results": workflow_results
+                }
+            
+            if not availability_check.get("available"):
+                logger.error(f"❌ [CREATE_INSTANCE_WORKFLOW] Subdomain '{subdomain}' is not available")
+                return {
+                    "success": False,
+                    "error": f"Subdomain '{subdomain}' is not available",
+                    "workflow_results": workflow_results
+                }
+            
+            # Step 2: Create database record via Console API
+            logger.info(f"[CREATE_INSTANCE_WORKFLOW] Step 2: Creating database record via Console API")
+            try:
+                logger.info(f"[CREATE_INSTANCE_WORKFLOW] Getting contact information...")
+                contact = self._get_request_user_from_contact()
+                logger.info(f"[CREATE_INSTANCE_WORKFLOW] ✅ Contact retrieved: {contact.get('email', 'N/A')}")
+            except ValueError as contact_error:
+                error_msg = f"Failed to get contact information: {str(contact_error)}"
+                logger.error(f"❌ [CREATE_INSTANCE_WORKFLOW] {error_msg}")
+
+                return {
+                    "success": False,
+                    "error": error_msg,
+                    "workflow_results": workflow_results
+                }
+
+            try:
+                logger.info(f"[CREATE_INSTANCE_WORKFLOW] Creating database record...")
+                console_creation = self.create_instance_database(
+                    name=name,
+                    subdomain=subdomain,
+                    contact_uuid=contact["uuid"],
+                )
+                logger.info(f"[CREATE_INSTANCE_WORKFLOW] Database creation result: success={console_creation.get('success', False)}")
+            except Exception as db_error:
+                error_msg = f"Failed to create database record: {str(db_error)}"
+                logger.error(f"❌ [CREATE_INSTANCE_WORKFLOW] {error_msg}")
+
+                return {
+                    "success": False,
+                    "error": error_msg,
+                    "workflow_results": workflow_results
+                }
+            
+            workflow_results["steps"]["2_console_creation"] = console_creation
+
+            if not console_creation.get("success"):
+                error_msg = console_creation.get('error', 'Unknown error')
+                logger.error(f"❌ [CREATE_INSTANCE_WORKFLOW] Step 2 failed: {error_msg}")
+
+                return {
+                    "success": False,
+                    "error": f"Failed to create database record via Console API: {error_msg}",
+                    "workflow_results": workflow_results
+                }
+
+            # Validate console_creation result structure
+            console_result = console_creation.get("result")
+            if not console_result:
+                return {
+                    "success": False,
+                    "error": "Database creation returned no result",
+                    "workflow_results": workflow_results
+                }
+            
+            console_properties = console_result.get("properties") if isinstance(console_result, dict) else {}
+            if not console_properties:
+                logger.warning("⚠️  Console creation result missing properties, using defaults")
+                console_properties = {}
+
+            logger.info(f"[CREATE_INSTANCE_WORKFLOW] ✅ Database record created successfully")
+
+            # Step 3: Update via AWS Gateway
+            logger.info(f"[CREATE_INSTANCE_WORKFLOW] Step 3: Updating via AWS Gateway")
+
+            gateway_instance_data = {
+                "subdomain": subdomain,
+                "pos_billing_plan_id": console_properties.get("instance_billing_plan", "69"),
+                "pos_data_centre_id": console_properties.get("instance_data_centre", "67"),
+                "tags": [],
+                "created_by": contact.get("email", self.console_email),
+                "is_duplication": False,
+                "request_full_url": console_properties.get("url", f"{subdomain}.staging.oregon.platform-os.com"),
+                "request_ip": "",
+                "request_user_id": str(contact.get("id", "76")),
+                "partner_id": "11"
+            }
+            
+            try:
+                logger.info(f"[CREATE_INSTANCE_WORKFLOW] Calling create_instance with gateway_instance_data...")
+                gateway_result = self.create_instance(gateway_instance_data, environment)
+                logger.info(f"[CREATE_INSTANCE_WORKFLOW] Gateway result: success={gateway_result.get('success', False)}")
+            except Exception as gateway_error:
+                error_msg = f"Failed to create instance via AWS Gateway: {str(gateway_error)}"
+                logger.error(f"❌ [CREATE_INSTANCE_WORKFLOW] {error_msg}")
+
+                gateway_result = {
+                    "success": False,
+                    "error": error_msg
+                }
+            
+            workflow_results["steps"]["3_gateway_update"] = gateway_result
+            
+            # Check if gateway step succeeded
+            if not gateway_result.get("success", False):
+                error_msg = gateway_result.get('error', 'Unknown error')
+                logger.error(f"❌ [CREATE_INSTANCE_WORKFLOW] Step 3 failed: {error_msg}")
+
+                return {
+                    "success": False,
+                    "error": f"Instance creation workflow completed but AWS Gateway step failed: {error_msg}",
+                    "subdomain": subdomain,
+                    "workflow_results": workflow_results,
+                    "database_saved": True,
+                    "step_function_updated": False
+                }
+            
+            logger.info(f"[CREATE_INSTANCE_WORKFLOW] ✅ All steps completed successfully!")
+            return {
+                "success": True,
+                "subdomain": subdomain,
+                "name": name,
+                "message": f"Instance '{name}' (subdomain: '{subdomain}') created successfully",
+                "workflow_results": workflow_results,
+                "database_saved": True,
+                "step_function_updated": gateway_result.get("success", False)
+            }
+        except Exception as workflow_error:
+            error_msg = f"Workflow failed: {str(workflow_error)}"
+            logger.error(f"❌ [CREATE_INSTANCE_WORKFLOW] {error_msg}")
+
             return {
                 "success": False,
-                "error": f"Subdomain '{subdomain}' is not available",
-                "workflow_results": workflow_results
+                "error": error_msg,
+                "workflow_results": workflow_results if 'workflow_results' in locals() else {},
             }
-        
-        # Step 2: Create database record via Console API
-        logger.info(f"[COMPLETE WORKFLOW] Step 2: Creating database record via Console API")
-        console_creation = self.create_instance_console(
-            name=name,
-            subdomain=subdomain,
-            environment=environment,
-            instance_data_centre=instance_data_centre,
-            instance_billing_plan=instance_billing_plan,
-            tags=tags,
-            pay_on_invoice=pay_on_invoice,
-            domain_ids=domain_ids,
-            image=image
-        )
-        workflow_results["steps"]["2_console_creation"] = console_creation
-        
-        if not console_creation.get("success"):
-            return {
-                "success": False,
-                "error": "Failed to create database record via Console API",
-                "workflow_results": workflow_results
-            }
-        
-        logger.info(f"[COMPLETE WORKFLOW] Database record created successfully")
-        
-        # Step 3: Update via AWS Gateway
-        logger.info(f"[COMPLETE WORKFLOW] Step 3: Updating via AWS Gateway")
-        
-        gateway_instance_data = {
-            "subdomain": subdomain,
-            "pos_billing_plan_id": pos_billing_plan_id,
-            "pos_data_centre_id": pos_data_centre_id,
-            "tags": tags or [],
-            "created_by": created_by,
-            "is_duplication": is_duplication,
-            "request_full_url": request_full_url,
-            "request_ip": request_ip,
-            "request_user_id": request_user_id,
-            "partner_id": partner_id
-        }
-        
-        gateway_result = self.create_instance(gateway_instance_data, environment)
-        workflow_results["steps"]["3_gateway_update"] = gateway_result
-        
-        return {
-            "success": True,
-            "subdomain": subdomain,
-            "message": f"Instance '{subdomain}' created successfully",
-            "workflow_results": workflow_results,
-            "database_saved": True,
-            "step_function_updated": gateway_result.get("success", False)
-        }
     
     # ============================================================================
     # LANGCHAIN TOOLS
@@ -1023,33 +746,7 @@ class InstanceTools:
         from langchain_core.tools import tool
         
         tools = []
-        
-        @tool
-        # def check_subdomain_availability(subdomain: str) -> str:
-        #     """Check subdomain availability via Console API."""
-        #     result = self.check_subdomain_availability(subdomain)
-        #     return json.dumps(result, indent=2)
-        
-        @tool
-        def create_instance_console(instance_data: str) -> str:
-            """Create instance via Console API (direct database save)."""
-            try:
-                data = json.loads(instance_data) if isinstance(instance_data, str) else instance_data
-                result = self.create_instance_console(
-                    name=data["name"],
-                    subdomain=data["subdomain"],
-                    environment=data["environment"],
-                    instance_data_centre=data["instance_data_centre"],
-                    instance_billing_plan=data["instance_billing_plan"],
-                    tags=data.get("tags"),
-                    pay_on_invoice=data.get("pay_on_invoice", False),
-                    domain_ids=data.get("domain_ids"),
-                    image=data.get("image")
-                )
-                return json.dumps(result, indent=2)
-            except (json.JSONDecodeError, KeyError) as e:
-                return json.dumps({"success": False, "error": f"Invalid input: {str(e)}"}, indent=2)
-        
+
         @tool
         def validate_subdomain(subdomain: str) -> str:
             """Validate subdomain via AWS Gateway."""
@@ -1067,36 +764,19 @@ class InstanceTools:
                 return json.dumps({"success": False, "error": f"Invalid JSON: {str(e)}"}, indent=2)
         
         @tool
-        def create_instance_complete_workflow(instance_data: str, environment: str = "production") -> str:
+        def create_instance_complete_workflow(instance_data: str, environment: str = "staging") -> str:
             """Complete instance creation workflow (RECOMMENDED METHOD)."""
             try:
                 data = json.loads(instance_data) if isinstance(instance_data, str) else instance_data
                 result = self.create_instance_complete_workflow(
                     name=data["name"],
-                    subdomain=data["subdomain"],
                     environment=data["environment"],
-                    instance_data_centre=data["instance_data_centre"],
-                    instance_billing_plan=data["instance_billing_plan"],
-                    pos_billing_plan_id=data["pos_billing_plan_id"],
-                    pos_data_centre_id=data["pos_data_centre_id"],
-                    tags=data.get("tags"),
-                    created_by=data.get("created_by", ""),
-                    pay_on_invoice=data.get("pay_on_invoice", False),
-                    domain_ids=data.get("domain_ids"),
-                    image=data.get("image"),
-                    is_duplication=data.get("is_duplication", False),
-                    request_full_url=data.get("request_full_url", ""),
-                    request_ip=data.get("request_ip", ""),
-                    request_user_id=data.get("request_user_id", ""),
-                    partner_id=data.get("partner_id", "11")
                 )
                 return json.dumps(result, indent=2)
             except (json.JSONDecodeError, KeyError) as e:
                 return json.dumps({"success": False, "error": f"Invalid input: {str(e)}"}, indent=2)
         
         tools.extend([
-            # check_subdomain_availability,
-            create_instance_console,
             validate_subdomain,
             create_instance,
             create_instance_complete_workflow

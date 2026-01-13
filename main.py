@@ -4,13 +4,14 @@ import uuid
 import json
 import uvicorn
 import hashlib
+from datetime import datetime
 from dotenv import load_dotenv
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import StreamingResponse
 from contextlib import asynccontextmanager
 from langchain_core.messages import HumanMessage
-from langgraph.prebuilt import create_react_agent
-from langchain_google_vertexai import ChatVertexAI
+from langchain.agents import create_agent
+from langchain_google_genai import ChatGoogleGenerativeAI
 from collections import defaultdict
 from typing import Dict, Any, Optional, List
 import httpx
@@ -33,28 +34,49 @@ GCP_PROJECT_ID = os.getenv("GCP_PROJECT_ID")
 GCP_REGION = os.getenv("GCP_REGION") 
 GEMINI_MODEL_NAME = os.getenv("GEMINI_MODEL_NAME", "gemini-2.5-flash")
 
+CONSOLE_EMAIL = os.getenv("CONSOLE_EMAIL", "")
 
-AWS_CREATE_INSTANCE_URL = os.getenv("AWS_CREATE_INSTANCE_URL", "https://3exw0r8y5d.execute-api.ap-southeast-2.amazonaws.com")
-AWS_INSTANCE_JWT_SECRET = os.getenv("AWS_INSTANCE_JWT_SECRET", "")
-
-# Console API Configuration
-CONSOLE_BASE_URL = os.getenv("CONSOLE_BASE_URL", "https://console.insites.io")
-CONSOLE_CSRF_TOKEN = os.getenv("CONSOLE_CSRF_TOKEN", "")  # Optional if username/password provided
-CONSOLE_USERNAME = os.getenv("CONSOLE_USERNAME", "")  # For automatic CSRF token retrieval
-CONSOLE_PASSWORD = os.getenv("CONSOLE_PASSWORD", "")  # For automatic CSRF token retrieval
-
-# Handle credentials
-CREDENTIALS_PATH = os.path.join(os.path.dirname(__file__), "vertex-credentials.json")
-if os.path.exists(CREDENTIALS_PATH):
-    os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = CREDENTIALS_PATH
-    logger.info(f"Using local credentials from: {CREDENTIALS_PATH}")
-else:
+def setup_credentials():
+    """
+    Setup Google Cloud credentials.
+    
+    SECURITY NOTE: This function checks for credentials in this order:
+    1. Cloud Run service account (production - automatic, no files needed)
+    2. Local .env file (development only - NEVER commit credentials!)
+    3. Explicit credentials file (development only - NEVER commit!)
+    
+    In production (Cloud Run), credentials are handled automatically via
+    the service account assigned during deployment.
+    """
+    # Check if running on Cloud Run (production)
+    if os.getenv("K_SERVICE"):  # K_SERVICE is set by Cloud Run
+        logger.info("🔒 Running on Cloud Run - using built-in service account authentication")
+        logger.info("✅ No credential files needed - automatic authentication enabled")
+        return
+    
+    # Local development only
+    logger.warning("⚠️  Running in local development mode")
+    
+    # Check for local credentials file (DEVELOPMENT ONLY!)
+    credentials_path = os.path.join(os.path.dirname(__file__), "vertex-credentials.json")
+    if os.path.exists(credentials_path):
+        logger.warning("🚨 WARNING: Found vertex-credentials.json file!")
+        logger.warning("🚨 This file should NEVER be committed to Git!")
+        logger.warning("🚨 Using local credentials for development only")
+        os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = credentials_path
+        return
+    
+    # Check environment variable
     env_credentials = os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
     if env_credentials:
-        os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = env_credentials
-        logger.info(f"Using credentials from environment: {env_credentials}")
+        if os.path.exists(env_credentials):
+            logger.warning(f"⚠️  Using credentials from environment: {env_credentials}")
+            logger.warning("⚠️  Development mode only - do not commit credential files!")
+        else:
+            logger.error(f"❌ Credentials file not found: {env_credentials}")
     else:
-        logger.info("Using default service account credentials from Cloud Run")
+        logger.info("ℹ️  No local credentials found - using default application credentials")
+        logger.info("ℹ️  This is expected for Cloud Run deployments")
 
 def validate_environment():
     """Validate environment variables when actually needed."""
@@ -108,6 +130,7 @@ async def lifespan(app: FastAPI):
     # Startup
     logger.info("🚀 Starting MCP CRM Server...")
     
+    setup_credentials()
     # Validate environment at startup (runtime)
     try:
         validate_environment()
@@ -120,11 +143,11 @@ async def lifespan(app: FastAPI):
     # Initialize LLM
     try:
         logger.info("🔧 Initializing LLM...")
-        llm = ChatVertexAI(
+        llm = ChatGoogleGenerativeAI(
+            model=GEMINI_MODEL_NAME,
+            temperature=0,
             project=GCP_PROJECT_ID,
             location=GCP_REGION,
-            model_name=GEMINI_MODEL_NAME,
-            temperature=0,
         )
         app.state.llm = llm
         logger.info("✅ LLM initialized successfully")
@@ -168,9 +191,8 @@ async def mcp_list_tools(request: ToolsRequest) -> ToolsListResponse:
     try:
         # Validate the instance credentials
         crm_tools = CRMTools(request.instance_url, request.instance_api_key)
-        aws_create_instance_url = AWS_CREATE_INSTANCE_URL
-        aws_instance_jwt_secret = AWS_INSTANCE_JWT_SECRET
-        
+
+    
         return ToolsListResponse(
             tools=[
                 # ========== CONTACT TOOLS ==========
@@ -470,16 +492,16 @@ async def mcp_list_tools(request: ToolsRequest) -> ToolsListResponse:
                 # ========== INSTANCE MANAGEMENT TOOLS ==========
                 Tool(
                     name="validate_subdomain",
-                    description="Validate if a subdomain is available for a new PlatformOS instance before creating it.",
+                    description="Validate if a name is available for a new PlatformOS instance before creating it.",
                     inputSchema={
                         "type": "object",
                         "properties": {
-                            "subdomain": {
+                            "name": {
                                 "type": "string",
-                                "description": "The subdomain to check (e.g., 'my-new-site')"
+                                "description": "The name to check (e.g., 'my-new-site')"
                             }
                         },
-                        "required": ["subdomain"]
+                        "required": ["name"]
                     }
                 ),
                 # Tool(
@@ -528,27 +550,19 @@ async def mcp_list_tools(request: ToolsRequest) -> ToolsListResponse:
                     inputSchema={
                         "type": "object",
                         "properties": {
-                            "name": {"type": "string", "description": "Instance name (required)"},
-                            "subdomain": {"type": "string", "description": "Instance subdomain (required)"},
-                            "environment": {"type": "string", "description": "'Staging' or 'Production'", "enum": ["Staging", "Production"]},
-                            "instance_data_centre": {"type": "string", "description": "Data centre ID for Console API (required)"},
-                            "instance_billing_plan": {"type": "string", "description": "Billing plan ID for Console API (required)"},
-                            "pos_billing_plan_id": {"type": "string", "description": "POS billing plan ID for AWS Gateway (required)"},
-                            "pos_data_centre_id": {"type": "string", "description": "POS data centre ID for AWS Gateway (required)"},
-                            "tags": {"type": "array", "items": {"type": "string"}},
-                            "created_by": {"type": "string"},
-                            "pay_on_invoice": {"type": "boolean"},
-                            "is_duplication": {"type": "boolean"}
+                            "name": {"type": "string", "description": "Instance name (required)"}
                         },
-                        "required": ["name", "subdomain", "environment", "instance_data_centre", 
-                                    "instance_billing_plan", "pos_billing_plan_id", "pos_data_centre_id"]
+                        "required": ["name"]
                     }
                 )
             ]
         )
     except Exception as e:
         logger.error(f"Error listing tools: {e}")
-        raise HTTPException(status_code=400, detail=f"Invalid instance credentials: {str(e)}")
+        import traceback
+        error_traceback = traceback.format_exc()
+        logger.error(f"Full traceback: {error_traceback}")
+        raise HTTPException(status_code=400, detail=f"Error listing tools: {str(e)}\n\nTraceback:\n{error_traceback}")
 
 @app.post("/mcp/tools/call")
 async def mcp_call_tool(request: CallToolRequest, instance_url: Optional[str] = None, instance_api_key: Optional[str] = None) -> CallToolResponse:
@@ -560,6 +574,8 @@ async def mcp_call_tool(request: CallToolRequest, instance_url: Optional[str] = 
         # Route to appropriate tool handler based on tool name
         tool_name = request.name
         args = request.arguments or {}
+        
+        logger.info(f"📥 Tool call received: name='{tool_name}', args keys={list(args.keys())}, instance_url={bool(instance_url)}, instance_api_key={bool(instance_api_key)}")
         # CRM Tools
         if tool_name in ["get_contacts", "create_contact", "update_contact", 
                          "get_companies", "create_company", "update_company"]:
@@ -612,72 +628,114 @@ async def mcp_call_tool(request: CallToolRequest, instance_url: Optional[str] = 
                     isError=True
                 )
         # Instance Management Tools
-        elif tool_name in ["validate_subdomain", "create_instance", "create_instance_complete_workflow"]:
-            # Get AWS credentials
-            aws_create_instance_url = args.pop("aws_create_instance_url", None) or os.getenv("AWS_CREATE_INSTANCE_URL")
-            aws_instance_jwt_secret = args.pop("aws_instance_jwt_secret", None) or os.getenv("AWS_INSTANCE_JWT_SECRET")
+        elif tool_name in ["validate_subdomain", "create_instance"]:
+            logger.info(f"🔧 Processing instance tool: {tool_name}")
             
-            # Get Console credentials (supports both manual token and automatic login)
-            console_base_url = args.pop("console_base_url", None) or os.getenv("CONSOLE_BASE_URL", "")
-            console_csrf_token = args.pop("console_csrf_token", None) or os.getenv("CONSOLE_CSRF_TOKEN", "")
-            console_username = args.pop("console_username", None) or os.getenv("CONSOLE_USERNAME", "")
-            console_password = args.pop("console_password", None) or os.getenv("CONSOLE_PASSWORD", "")
-            
-            if not aws_create_instance_url or not aws_instance_jwt_secret:
+            # Ensure GCP_PROJECT_ID is set (required for Secret Manager)
+            if not GCP_PROJECT_ID:
                 return CallToolResponse(
                     content=[{
                         "type": "text",
-                        "text": "AWS credentials not configured. Set AWS_CREATE_INSTANCE_URL and AWS_INSTANCE_JWT_SECRET."
+                        "text": "GCP_PROJECT_ID environment variable is not set. This is required for Secret Manager access."
                     }],
                     isError=True
                 )
             
-            # Initialize instance tools with automatic CSRF token support
-            instance_tools = InstanceTools(
-                aws_create_instance_url=aws_create_instance_url,
-                aws_instance_jwt_secret=aws_instance_jwt_secret,
-                console_base_url=console_base_url,
-                console_csrf_token=console_csrf_token,
-                console_username=console_username,
-                console_password=console_password
-            )
+            # Get Console credentials
+            console_email = args.pop("console_email", None) or os.getenv("CONSOLE_EMAIL", "")
+            
+            if not console_email and tool_name == "create_instance":
+                logger.warning("⚠️  CONSOLE_EMAIL not provided, some operations may fail")
+            
+            # Initialize instance tools - it will fetch credentials from Secret Manager internally
+            try:
+                instance_tools = InstanceTools(
+                    console_email=console_email
+                )
+                logger.info("✅ InstanceTools initialized successfully")
+            except Exception as init_error:
+                logger.error(f"❌ Failed to initialize InstanceTools: {init_error}")
+                import traceback
+                traceback.print_exc()
+                return CallToolResponse(
+                    content=[{
+                        "type": "text",
+                        "text": f"Failed to initialize InstanceTools: {str(init_error)}\n\nThis usually means:\n1. GCP_PROJECT_ID is not set\n2. Secret Manager permissions are missing\n3. Required secrets don't exist in Secret Manager\n\nTraceback:\n{traceback.format_exc()}"
+                    }],
+                    isError=True
+                )
             
             # Execute instance tool
-            if tool_name == "validate_subdomain":
-                result = instance_tools.validate_subdomain(args.get("subdomain", ""))
-            
-            # elif tool_name == "create_instance":
-            #     environment = args.pop("environment", "production")
-            #     result = instance_tools.create_instance(args, environment)
-            
-            elif tool_name == "create_instance":
-                result = instance_tools.create_instance_complete_workflow(
-                    name=args.get("name"),
-                    subdomain=args.get("subdomain"),
-                    environment=args.get("environment"),
-                    instance_data_centre=args.get("instance_data_centre", "571"),
-                    instance_billing_plan=args.get("instance_billing_plan", "127"),
-                    pos_billing_plan_id=args.get("pos_billing_plan_id", "246"),
-                    pos_data_centre_id=args.get("pos_data_centre_id", "8"),
-                    tags=args.get("tags"),
-                    created_by=args.get("created_by", "enrique@insites.io"),
-                    pay_on_invoice=args.get("pay_on_invoice", False),
-                    domain_ids=args.get("domain_ids"),
-                    image=args.get("image"),
-                    is_duplication=args.get("is_duplication", False),
-                    request_full_url=args.get("request_full_url", "console-uat.staging.oregon.platform-os.com"),
-                    request_ip=args.get("request_ip", ""),
-                    request_user_id=args.get("request_user_id", "54"),
-                    partner_id=args.get("partner_id", "11")
+            result = None
+            try:
+                if tool_name == "validate_subdomain":
+                    # Handle both "name" and "subdomain" parameter names for compatibility
+                    subdomain_input = args.get("name") or args.get("subdomain", "")
+                    if not subdomain_input:
+                        return CallToolResponse(
+                            content=[{
+                                "type": "text",
+                                "text": "Missing required parameter: 'name' or 'subdomain' is required for validate_subdomain"
+                            }],
+                            isError=True
+                        )
+                    logger.info(f"🔍 Validating subdomain: {subdomain_input}")
+                    result = instance_tools.validate_subdomain(name=subdomain_input)
+                
+                elif tool_name == "create_instance":
+                    # Validate required parameters
+                    name = args.get("name")
+                    if not name:
+                        return CallToolResponse(
+                            content=[{
+                                "type": "text",
+                                "text": "Missing required parameter: 'name' is required for create_instance"
+                            }],
+                            isError=True
+                        )
+                    
+                    # Provide default for environment if not specified
+                    environment = args.get("environment", "production")
+                    
+                    logger.info(f"🚀 Creating instance: name={name}, environment={environment}")
+                    result = instance_tools.create_instance_complete_workflow(
+                        name=name,
+                        environment=environment
+                    )
+                else:
+                    return CallToolResponse(
+                        content=[{"type": "text", "text": f"Unknown tool: {tool_name}"}],
+                        isError=True
+                    )
+            except Exception as tool_error:
+                logger.error(f"❌ Error executing instance tool '{tool_name}': {tool_error}")
+                import traceback
+                logger.error(f"Traceback: {traceback.format_exc()}")
+                return CallToolResponse(
+                    content=[{
+                        "type": "text",
+                        "text": f"Failed to execute tool '{tool_name}': {str(tool_error)}\n\nTraceback:\n{traceback.format_exc()}"
+                    }],
+                    isError=True
                 )
-        else:
+        
+        # Check if result exists
+        if result is None:
+            logger.error(f"❌ Tool '{tool_name}' returned None result")
             return CallToolResponse(
-                content=[{"type": "text", "text": f"Unknown tool: {tool_name}"}],
+                content=[{
+                    "type": "text",
+                    "text": f"Tool execution returned no result for: {tool_name}"
+                }],
                 isError=True
             )
         
         # Check if result indicates an error
         is_error = not result.get("success", True)
+        
+        logger.info(f"✅ Tool '{tool_name}' executed. Success: {not is_error}")
+        if is_error:
+            logger.warning(f"⚠️  Tool '{tool_name}' returned error: {result.get('error', 'Unknown error')}")
         
         return CallToolResponse(
             content=[{
@@ -722,6 +780,52 @@ async def health_check():
 async def health_check_simple():
     """Simple health check that responds immediately."""
     return {"status": "ok"}
+
+@app.get("/debug/instance-tools")
+async def debug_instance_tools():
+    """Debug endpoint to test InstanceTools initialization and Secret Manager access."""
+    debug_info = {
+        "gcp_project_id": GCP_PROJECT_ID or "NOT SET",
+        "console_email": os.getenv("CONSOLE_EMAIL", "NOT SET"),
+        "timestamp": datetime.now().isoformat()
+    }
+    
+    errors = []
+    
+    # Test Secret Manager access
+    if GCP_PROJECT_ID:
+        try:
+            from utils.secret_manager import get_secret_manager
+            secret_mgr = get_secret_manager()
+            debug_info["secret_manager"] = "✅ Initialized successfully"
+            
+            # Test accessing a secret (don't log the value)
+            try:
+                test_secret = secret_mgr.get_secret("console-instance-api-key")
+                debug_info["console_instance_api_key"] = "✅ Retrieved successfully"
+            except Exception as e:
+                errors.append(f"Failed to get console-instance-api-key: {str(e)}")
+                debug_info["console_instance_api_key"] = f"❌ Error: {str(e)}"
+        except Exception as e:
+            errors.append(f"Secret Manager initialization failed: {str(e)}")
+            debug_info["secret_manager"] = f"❌ Error: {str(e)}"
+    else:
+        errors.append("GCP_PROJECT_ID is not set")
+        debug_info["secret_manager"] = "❌ Cannot initialize - GCP_PROJECT_ID not set"
+    
+    # Test InstanceTools initialization
+    try:
+        from servers.instance_tools import InstanceTools
+        instance_tools = InstanceTools(console_email=os.getenv("CONSOLE_EMAIL", ""))
+        debug_info["instance_tools"] = "✅ Initialized successfully"
+    except Exception as e:
+        errors.append(f"InstanceTools initialization failed: {str(e)}")
+        debug_info["instance_tools"] = f"❌ Error: {str(e)}"
+    
+    debug_info["errors"] = errors
+    debug_info["status"] = "ok" if not errors else "errors_found"
+    
+    return debug_info
 
 @app.get("/docs")
 async def api_docs():
@@ -777,7 +881,7 @@ async def query_endpoint(request: QueryRequest):
         tools = create_crm_tools(request.instance_url, request.instance_api_key)
         
         # Create the agent with tools
-        agent_executor = create_react_agent(app.state.llm, tools)
+        agent_executor = create_agent(app.state.llm, tools)
         
         # Process the query
         result = await agent_executor.ainvoke({
@@ -813,7 +917,7 @@ async def messages_endpoint(request: MessageRequest, session_id: str):
         tools = create_crm_tools(request.instance_url, request.instance_api_key)
         
         # Create the agent with tools
-        agent_executor = create_react_agent(app.state.llm, tools)
+        agent_executor = create_agent(app.state.llm, tools)
         
         # Create a queue for this session if it doesn't exist
         if session_id not in message_queues:

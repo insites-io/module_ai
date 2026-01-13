@@ -5,14 +5,9 @@ import requests
 import traceback
 
 CLOUD_RUN_URL = os.environ.get("SERVER_URL")
-INSITES_INSTANCE_URL = os.environ.get("INSITES_INSTANCE_URL")  # The actual Insites instance URL
-INSITES_INSTANCE_API_KEY = os.environ.get("INSITES_INSTANCE_API_KEY")  # The Insites API key
-AWS_CREATE_INSTANCE_URL = os.environ.get("AWS_CREATE_INSTANCE_URL")  # AWS API Gateway URL
-AWS_INSTANCE_JWT_SECRET = os.environ.get("AWS_INSTANCE_JWT_SECRET")  # AWS JWT secret
-CONSOLE_BASE_URL = os.environ.get("CONSOLE_BASE_URL", "https://console.insites.io")  # Console base URL
-CONSOLE_CSRF_TOKEN = os.environ.get("CONSOLE_CSRF_TOKEN", "")  # Console CSRF token (optional)
-CONSOLE_USERNAME = os.environ.get("CONSOLE_USERNAME", "")  # Console username (optional, for auto-login)
-CONSOLE_PASSWORD = os.environ.get("CONSOLE_PASSWORD", "")  # Console password (optional, for auto-login)
+INSITES_INSTANCE_URL = os.environ.get("INSITES_INSTANCE_URL")
+INSITES_INSTANCE_API_KEY = os.environ.get("INSITES_INSTANCE_API_KEY")
+CONSOLE_EMAIL = os.environ.get("CONSOLE_EMAIL", "") 
 
 if not CLOUD_RUN_URL:
     print("SERVER_URL (Cloud Run URL) is not set", file=sys.stderr)
@@ -21,9 +16,6 @@ if not CLOUD_RUN_URL:
 # Ensure URL doesn't end with /
 CLOUD_RUN_URL = CLOUD_RUN_URL.rstrip('/')
 
-# Note: INSITES_INSTANCE_URL and INSITES_INSTANCE_API_KEY are optional
-# AWS_CREATE_INSTANCE_URL and AWS_INSTANCE_JWT_SECRET are required for instance management tools
-# CONSOLE_BASE_URL is required for instance management tools (has default)
 
 def send_error(request_id, code, message, data=None):
     """Send a JSON-RPC 2.0 compliant error response"""
@@ -151,23 +143,13 @@ def handle_tools_call(request_id, params):
         # Check if this is an instance management tool
         instance_tools = ["validate_subdomain", "create_instance"]
         is_instance_tool = tool_name in instance_tools
-        
-        # For instance tools, AWS credentials are required
-        if is_instance_tool:
-            if not AWS_CREATE_INSTANCE_URL or not AWS_INSTANCE_JWT_SECRET:
-                return send_error(
-                    request_id,
-                    -32602,
-                    "AWS_CREATE_INSTANCE_URL and AWS_INSTANCE_JWT_SECRET environment variables must be set for instance management tools"
-                )
-        # For CRM tools, Insites credentials are required
-        else:
-            if not INSITES_INSTANCE_URL or not INSITES_INSTANCE_API_KEY:
-                return send_error(
-                    request_id,
-                    -32602,
-                    "INSITES_INSTANCE_URL and INSITES_INSTANCE_API_KEY environment variables must be set for CRM tools"
-                )
+
+        if not INSITES_INSTANCE_URL or not INSITES_INSTANCE_API_KEY:
+            return send_error(
+                request_id,
+                -32602,
+                "INSITES_INSTANCE_URL and INSITES_INSTANCE_API_KEY environment variables must be set for CRM tools"
+            )
         
         # Prepare query parameters and request body
         query_params = {}
@@ -176,24 +158,16 @@ def handle_tools_call(request_id, params):
             "arguments": arguments.copy()  # Make a copy so we don't modify the original
         }
         
-        # Add credentials to request based on tool type
+        # # Add credentials to request based on tool type
         if is_instance_tool:
             # For instance tools, add AWS credentials and console credentials to arguments
-            request_body["arguments"]["aws_create_instance_url"] = AWS_CREATE_INSTANCE_URL
-            request_body["arguments"]["aws_instance_jwt_secret"] = AWS_INSTANCE_JWT_SECRET
-            request_body["arguments"]["console_base_url"] = CONSOLE_BASE_URL
-            if CONSOLE_CSRF_TOKEN:
-                request_body["arguments"]["console_csrf_token"] = CONSOLE_CSRF_TOKEN
-            if CONSOLE_USERNAME:
-                request_body["arguments"]["console_username"] = CONSOLE_USERNAME
-            if CONSOLE_PASSWORD:
-                request_body["arguments"]["console_password"] = CONSOLE_PASSWORD
-        else:
-            # For CRM tools, add Insites credentials as query parameters
-            query_params = {
-                "instance_url": INSITES_INSTANCE_URL,
-                "instance_api_key": INSITES_INSTANCE_API_KEY
-            }
+            if CONSOLE_EMAIL:
+                request_body["arguments"]["console_email"] = CONSOLE_EMAIL
+
+        query_params = {
+            "instance_url": INSITES_INSTANCE_URL,
+            "instance_api_key": INSITES_INSTANCE_API_KEY
+        }
         
         # Call the Cloud Run REST endpoint
         response = requests.post(
