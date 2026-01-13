@@ -13,8 +13,7 @@ import re
 from utils.secret_manager import get_secret, get_secret_manager
 import uuid 
 import os
-# Configure logging
-logging.basicConfig(level=logging.INFO)
+# Logger is configured in main.py - just get the logger here
 logger = logging.getLogger(__name__)
 
 class InstanceTools:

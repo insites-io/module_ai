@@ -5,8 +5,7 @@ from typing import Dict, Any, List, Optional
 from langchain_core.tools import tool
 from pydantic import BaseModel, Field
 
-# Configure logging
-logging.basicConfig(level=logging.INFO)
+# Logger is configured in main.py - just get the logger here
 logger = logging.getLogger(__name__)
 
 class ContactData(BaseModel):

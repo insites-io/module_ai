@@ -22,8 +22,13 @@ import logging
 from servers.crm_tools import CRMTools
 from servers.instance_tools import InstanceTools
 
-# Configure logging
-logging.basicConfig(level=logging.INFO)
+# Configure logging for Cloud Run with proper formatting
+# This should only be called once - other modules just use logging.getLogger(__name__)
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    force=True  # Force reconfiguration to ensure Cloud Run picks it up
+)
 logger = logging.getLogger(__name__)
 
 # --- Load environment variables from .env file ---
