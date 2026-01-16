@@ -8,7 +8,6 @@ from Crypto.Cipher import AES
 from Crypto.Util.Padding import pad
 import base64
 import jwt
-from bs4 import BeautifulSoup
 import re
 from utils.secret_manager import get_secret, get_secret_manager
 import uuid 
@@ -17,7 +16,7 @@ import os
 logger = logging.getLogger(__name__)
 
 class InstanceTools:
-    """Instance Management Tools for PlatformOS instance operations."""
+    """Instance Management Tools for Insites instance operations."""
     
     def __init__(
         self, 
@@ -25,9 +24,9 @@ class InstanceTools:
     ):
         self.console_email = console_email
     def _encrypt_token(self, token: str, secret_key: str) -> str:
-        """Encrypt JWT token using AES-256-CBC to match PlatformOS encrypt filter format.
+        """Encrypt JWT token using AES-256-CBC to match Insites encrypt filter format.
         
-        PlatformOS encrypt filter format:
+        Insites encrypt filter format:
         - Removes dashes from secret_key
         - Takes first 32 characters as encryption key
         - Returns base64-encoded encrypted data (IV prepended to ciphertext)
@@ -55,7 +54,7 @@ class InstanceTools:
         """Create the Authorization header with encrypted JWT token for AWS Gateway."""
         try:
             secret_mgr = get_secret_manager()
-            aws_instance_jwt_secret = secret_mgr.get_secret("insites-auth-key-prod")
+            aws_instance_jwt_secret = secret_mgr.get_secret("insites-console-instance-jwt-token-prod")
             timestamp = str(int(time.time()))
             payload = {"timestamp": timestamp}
             token = jwt.encode(payload, aws_instance_jwt_secret, algorithm='HS256')
@@ -164,7 +163,7 @@ class InstanceTools:
                         "name": name,
                         "url": instance_url,
                         "result": result,
-                        "message": f"Instance record '{name}' created successfully",
+                        "message": f"Insites Instance record '{name}' created successfully",
                         "api": "database"
                     }
                 except json.JSONDecodeError as json_err:
@@ -367,7 +366,7 @@ class InstanceTools:
                     "result": result,
                     "subdomain": subdomain,
                     "available": is_available,
-                    "message": f"Subdomain '{subdomain}' is {'available' if is_available else 'unavailable'}",
+                    "message": f"Insites subdomain '{subdomain}' is {'available' if is_available else 'unavailable'}",
                     "api": "aws_gateway"
                 }
             else:
@@ -404,7 +403,7 @@ class InstanceTools:
     
     def create_instance(self, instance_data: Dict[str, Any], environment: str = "production") -> Dict[str, Any]:
         """
-        Create a new PlatformOS instance via AWS Gateway (step function flow).
+        Create a new Insites instance via AWS Gateway (step function flow).
         Validates subdomain first, then creates and saves to database.
         
         Endpoint: POST /Staging/create-instance
@@ -513,12 +512,12 @@ class InstanceTools:
             if response.status_code in [200, 201]:
                 try:
                     result = response.json()
-                    logger.info(f"[AWS Gateway] Instance created successfully: {subdomain}")
+                    logger.info(f"[AWS Gateway] Insites Instance created successfully: {subdomain}")
                     return {
                         "success": True,
                         "result": result,
                         "subdomain": subdomain,
-                        "message": f"Instance '{subdomain}' created successfully via AWS Gateway",
+                        "message": f"Insites Instance '{subdomain}' created successfully via AWS Gateway",
                         "saved_to_database": True,
                         "api": "aws_gateway"
                     }
@@ -721,7 +720,7 @@ class InstanceTools:
                 "success": True,
                 "subdomain": subdomain,
                 "name": name,
-                "message": f"Instance '{name}' (subdomain: '{subdomain}') created successfully",
+                "message": f"Insites Instance '{name}' (subdomain: '{subdomain}') created successfully",
                 "workflow_results": workflow_results,
                 "database_saved": True,
                 "step_function_updated": gateway_result.get("success", False)

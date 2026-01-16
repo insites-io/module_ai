@@ -497,7 +497,7 @@ async def mcp_list_tools(request: ToolsRequest) -> ToolsListResponse:
                 # ========== INSTANCE MANAGEMENT TOOLS ==========
                 Tool(
                     name="validate_subdomain",
-                    description="Validate if a name is available for a new PlatformOS instance before creating it.",
+                    description="Validate if a name is available for a new Insites instance before creating it.",
                     inputSchema={
                         "type": "object",
                         "properties": {
@@ -551,11 +551,36 @@ async def mcp_list_tools(request: ToolsRequest) -> ToolsListResponse:
                 # ),
                 Tool(
                     name="create_instance",
-                    description="Complete instance creation workflow (RECOMMENDED). 3-step process: 1) Check subdomain, 2) Save to database via Console API (CRUCIAL), 3) Update via AWS Gateway. Ensures database record exists.",
+                    description="""Complete Insites instance creation workflow (RECOMMENDED). 
+                    
+                    IMPORTANT: When presenting results to the user, always use the phrase "Insites instance" in your response.
+                    
+                    This tool performs a 3-step process:
+                    1. Validates subdomain availability
+                    2. Creates Insites instance record in Console database (CRUCIAL)
+                    3. Sets up AWS Gateway configuration
+                    
+                    Returns structured information including:
+                    - Instance name and subdomain
+                    - Full URL (with environment)
+                    - Current status
+                    - Environment (staging/production)
+                    
+                    When presenting results, format your response like:
+                    "Perfect! I've successfully created your new Insites instance '[name]'. Here are the details:"
+                    Then show the instance details clearly.""",
                     inputSchema={
                         "type": "object",
                         "properties": {
-                            "name": {"type": "string", "description": "Instance name (required)"}
+                            "name": {
+                                "type": "string", 
+                                "description": "Instance name/subdomain (required)"
+                            },
+                            "environment": {
+                                "type": "string",
+                                "description": "Environment: 'staging' or 'production' (default: 'staging')",
+                                "enum": ["staging", "production"]
+                            }
                         },
                         "required": ["name"]
                     }
@@ -735,6 +760,32 @@ async def mcp_call_tool(request: CallToolRequest, instance_url: Optional[str] = 
                 isError=True
             )
         
+        if tool_name == "create_instance" and result.get("success"):
+            instance = result.get("instance", {})
+            name = instance.get("name", "")
+            url = instance.get("url", "")
+            environment = instance.get("environment", "")
+            status = instance.get("status", "Initializing")
+            
+            formatted_response = {
+                "status": "success",
+                "summary": f"Perfect! I've successfully created your new Insites instance '{name}'.",
+                "instance_type": "Insites Instance",
+                "details": {
+                    "Instance Name": name,
+                    "URL": url,
+                    "Status": status,
+                    "Environment": environment.capitalize()
+                },
+                "additional_info": "The Insites instance has been created in the database and the AWS Gateway setup has been initiated. The instance is currently initializing and should be ready to use shortly."
+            }
+            return CallToolResponse(
+                content=[{
+                    "type": "text",
+                    "text": formatted_response
+                }],
+                isError=False
+            )
         # Check if result indicates an error
         is_error = not result.get("success", True)
         
@@ -771,101 +822,9 @@ async def health_check():
     """Health check endpoint for the API service."""
     return {
         "status": "healthy",
-        "service": "MCP CRM API",
-        "version": "2.0.0",
+        "service": "Insites MCP Sever",
+        "version": "0.1.2",
         "message": "Server is running and ready",
-        "config": {
-            "project_id": GCP_PROJECT_ID or "not set",
-            "region": GCP_REGION or "not set",
-            "model": GEMINI_MODEL_NAME
-        }
-    }
-
-@app.get("/health")
-async def health_check_simple():
-    """Simple health check that responds immediately."""
-    return {"status": "ok"}
-
-@app.get("/debug/instance-tools")
-async def debug_instance_tools():
-    """Debug endpoint to test InstanceTools initialization and Secret Manager access."""
-    debug_info = {
-        "gcp_project_id": GCP_PROJECT_ID or "NOT SET",
-        "console_email": os.getenv("CONSOLE_EMAIL", "NOT SET"),
-        "timestamp": datetime.now().isoformat()
-    }
-    
-    errors = []
-    
-    # Test Secret Manager access
-    if GCP_PROJECT_ID:
-        try:
-            from utils.secret_manager import get_secret_manager
-            secret_mgr = get_secret_manager()
-            debug_info["secret_manager"] = "✅ Initialized successfully"
-            
-            # Test accessing a secret (don't log the value)
-            try:
-                test_secret = secret_mgr.get_secret("console-instance-api-key")
-                debug_info["console_instance_api_key"] = "✅ Retrieved successfully"
-            except Exception as e:
-                errors.append(f"Failed to get console-instance-api-key: {str(e)}")
-                debug_info["console_instance_api_key"] = f"❌ Error: {str(e)}"
-        except Exception as e:
-            errors.append(f"Secret Manager initialization failed: {str(e)}")
-            debug_info["secret_manager"] = f"❌ Error: {str(e)}"
-    else:
-        errors.append("GCP_PROJECT_ID is not set")
-        debug_info["secret_manager"] = "❌ Cannot initialize - GCP_PROJECT_ID not set"
-    
-    # Test InstanceTools initialization
-    try:
-        from servers.instance_tools import InstanceTools
-        instance_tools = InstanceTools(console_email=os.getenv("CONSOLE_EMAIL", ""))
-        debug_info["instance_tools"] = "✅ Initialized successfully"
-    except Exception as e:
-        errors.append(f"InstanceTools initialization failed: {str(e)}")
-        debug_info["instance_tools"] = f"❌ Error: {str(e)}"
-    
-    debug_info["errors"] = errors
-    debug_info["status"] = "ok" if not errors else "errors_found"
-    
-    return debug_info
-
-@app.get("/docs")
-async def api_docs():
-    """API documentation and usage examples."""
-    return {
-        "endpoints": {
-            "GET /": "Health check",
-            "GET /docs": "This API documentation",
-            "POST /mcp/tools/list": "List all available CRM tools (MCP standard)",
-            "POST /mcp/tools/call": "Execute a CRM tool (MCP standard)",
-            "POST /tools": "List tools (legacy)",
-            "POST /messages": "Send a prompt to the CRM agent (with SSE streaming)",
-            "POST /query": "Direct query endpoint (synchronous response)",
-            "GET /sse": "Server-Sent Events stream for real-time responses"
-        },
-        "mcp_standard": {
-            "POST /mcp/tools/list": {
-                "description": "MCP standard endpoint to list available tools",
-                "body": {
-                    "instance_url": "Your CRM instance URL",
-                    "instance_api_key": "Your CRM instance API key"
-                }
-            },
-            "POST /mcp/tools/call": {
-                "description": "MCP standard endpoint to execute a tool",
-                "query_params": {
-                    "instance_url": "Your CRM instance URL",
-                    "instance_api_key": "Your CRM instance API key"
-                },
-                "body": {
-                    "name": "Tool name to execute",
-                    "arguments": {"key": "value"}
-                }
-            }
-        }
     }
 
 # Legacy /tools endpoint for backward compatibility
@@ -874,134 +833,6 @@ async def list_tools(request: ToolsRequest):
     """Legacy endpoint - redirects to MCP standard."""
     return await mcp_list_tools(request)
 
-@app.post("/query")
-async def query_endpoint(request: QueryRequest):
-    """Direct query endpoint (synchronous response)."""
-    
-    if not app.state.llm:
-        raise HTTPException(status_code=500, detail="LLM not initialized")
-    
-    try:
-        # Create CRM tools with the provided credentials
-        tools = create_crm_tools(request.instance_url, request.instance_api_key)
-        
-        # Create the agent with tools
-        agent_executor = create_agent(app.state.llm, tools)
-        
-        # Process the query
-        result = await agent_executor.ainvoke({
-            "messages": [HumanMessage(content=request.prompt)]
-        })
-        
-        # Extract the response
-        response_content = result["messages"][-1].content if result.get("messages") else "No response generated"
-        
-        return {
-            "response": response_content,
-            "success": True
-        }
-        
-    except Exception as e:
-        logger.error(f"Error in query endpoint: {e}")
-        import traceback
-        traceback.print_exc()
-        return {
-            "error": str(e),
-            "success": False
-        }
-
-@app.post("/messages")
-async def messages_endpoint(request: MessageRequest, session_id: str):
-    """Send a prompt to the CRM agent (with SSE streaming)."""
-    
-    if not app.state.llm:
-        raise HTTPException(status_code=500, detail="LLM not initialized")
-    
-    try:
-        # Create CRM tools with the provided credentials
-        tools = create_crm_tools(request.instance_url, request.instance_api_key)
-        
-        # Create the agent with tools
-        agent_executor = create_agent(app.state.llm, tools)
-        
-        # Create a queue for this session if it doesn't exist
-        if session_id not in message_queues:
-            message_queues[session_id] = asyncio.Queue()
-        
-        # Process the query asynchronously
-        async def process_query():
-            try:
-                result = await agent_executor.ainvoke({
-                    "messages": [HumanMessage(content=request.prompt)]
-                })
-                
-                response_content = result["messages"][-1].content if result.get("messages") else "No response generated"
-                
-                await message_queues[session_id].put({
-                    "type": "response",
-                    "content": response_content,
-                    "session_id": session_id
-                })
-                
-                await message_queues[session_id].put({"type": "end"})
-                
-            except Exception as e:
-                await message_queues[session_id].put({
-                    "type": "error",
-                    "content": str(e),
-                    "session_id": session_id
-                })
-        
-        asyncio.create_task(process_query())
-        
-        return {"status": "processing", "session_id": session_id}
-        
-    except Exception as e:
-        logger.error(f"Error in messages endpoint: {e}")
-        import traceback
-        traceback.print_exc()
-        raise HTTPException(status_code=500, detail=f"Message processing failed: {str(e)}")
-
-@app.get("/sse")
-async def sse_endpoint(session_id: str):
-    """Server-Sent Events stream for real-time responses."""
-    
-    async def event_generator():
-        try:
-            if session_id not in message_queues:
-                yield f"data: {json.dumps({'error': 'Session not found'})}\n\n"
-                return
-            
-            queue = message_queues[session_id]
-            
-            while True:
-                try:
-                    message = await asyncio.wait_for(queue.get(), timeout=30.0)
-                    
-                    if message["type"] == "end":
-                        break
-                    
-                    yield f"data: {json.dumps(message)}\n\n"
-                    
-                except asyncio.TimeoutError:
-                    yield f"data: {json.dumps({'type': 'ping'})}\n\n"
-                    
-        except Exception as e:
-            yield f"data: {json.dumps({'error': str(e)})}\n\n"
-        finally:
-            if session_id in message_queues:
-                del message_queues[session_id]
-    
-    return StreamingResponse(
-        event_generator(),
-        media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "Connection": "keep-alive",
-            "Access-Control-Allow-Origin": "*",
-            "Access-Control-Allow-Headers": "*",
-        }
-    )
 
 if __name__ == "__main__":
     import uvicorn

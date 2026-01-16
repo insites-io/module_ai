@@ -59,7 +59,7 @@ mcp = MCPProxy()
 @mcp.tool()
 def validate_subdomain(subdomain: str) -> Dict[str, Any]:
     """
-    Validate if a subdomain is available for a new PlatformOS instance.
+    Validate if a subdomain is available for a new Insites instance.
     
     Args:
         subdomain: The subdomain to check (e.g., 'my-new-site')
@@ -83,7 +83,7 @@ def validate_subdomain(subdomain: str) -> Dict[str, Any]:
 @mcp.tool()
 def create_instance(instance_data: Dict[str, Any], environment: str = "production") -> Dict[str, Any]:
     """
-    Create a new PlatformOS instance. Automatically validates subdomain availability first.
+    Create a new Insites instance. Automatically validates subdomain availability first.
     
     Args:
         instance_data: Dictionary containing:
@@ -96,7 +96,7 @@ def create_instance(instance_data: Dict[str, Any], environment: str = "productio
         environment: 'staging' or 'production' (default: 'production')
     
     Returns:
-        Dict[str, Any]: Creation result with instance details or error information
+        Dict[str, Any]: Creation result with Insites Instance details or error information
     """
     logger.info(f"Creating instance with data: {instance_data}")
     
